@@ -1,0 +1,208 @@
+{
+  "meta": {
+    "title": "Brazil Premium / Pay-TV-like - Working (tested)",
+    "generated_at_utc": "2026-09-20T14:20:00Z",
+    "source_playlist": "https://iptv-org.github.io/iptv/countries/br.m3u (388 entries)",
+    "preferences_matched": ["HLS", "1080p where available", "premium / pay-TV style: movies, series, sports, news, kids"],
+    "test_method": "HTTP GET master playlist, check 200 + #EXTM3U + RESOLUTION. Tested 2026-09-20.",
+    "tokens_note": "No manual token extraction needed for this file - all URLs below returned 200 without custom headers. FAST entries (jmp2.uk / Pluto / Samsung TV Plus) already embed a rotating authToken query string maintained by the proxy; just use as-is. True premium (Premiere, Telecine, HBO Max linear, SporTV 1/2 official, ESPN official app, Combate) use login + DRM Widevine + IP-bound short-lived tokens (minutes) and have no stable open HLS - not included because they fail without subscription. Do not hardcode tokens you find in devtools - they expire.",
+    "player_notes": "mpv / VLC / TiviMate / Kodi. All HLS. No MPEG-DASH stable in this sweep.",
+    "total_working_in_file": 12
+  },
+  "channels": [
+    {
+      "id": "axn-brasil",
+      "name": "AXN Brazil",
+      "description": "Canal pago de ação e séries (NCIS, Hawaii Five-0, filmes). Versão BR em português.",
+      "category": "Premium / Movies / Series",
+      "protocol": "HLS",
+      "resolution": "1280x720",
+      "resolution_label": "720p",
+      "url": "http://170.83.16.50/AXN/index.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 30
+    },
+    {
+      "id": "ae-latin-br",
+      "name": "A&E Latin America Brazil",
+      "description": "Reality policial, investigação e true crime (NCIS, 60 Dias, Acumuladores). Áudio PT-BR.",
+      "category": "Premium / Entertainment",
+      "protocol": "HLS",
+      "resolution": "1280x720",
+      "resolution_label": "720p",
+      "url": "http://170.83.16.50/AeE/index.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 56
+    },
+    {
+      "id": "sony-channel-br",
+      "name": "Sony Channel Brazil",
+      "description": "Séries e filmes Sony (Grey's Anatomy, The Good Doctor). Grade paga dublado/legendado.",
+      "category": "Premium / Series",
+      "protocol": "HLS",
+      "resolution": "1280x720",
+      "resolution_label": "720p",
+      "url": "http://170.83.16.50/SONY_CHANNEL/index.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 55
+    },
+    {
+      "id": "studio-universal-br",
+      "name": "Studio Universal Brazil",
+      "description": "Filmes Universal 24h. Sessões com áudio original + PT. Versão FAST paga.",
+      "category": "Premium / Movies",
+      "protocol": "HLS",
+      "resolution": "1920x1080",
+      "resolution_label": "1080p",
+      "url": "http://187.102.210.46/universo/index.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 189
+    },
+    {
+      "id": "tnt-novelas-br",
+      "name": "TNT Novelas Brazil",
+      "description": "Novelas turcas, mexicanas e brasileiras 24h (Warner Bros. Discovery). Drama e romance.",
+      "category": "Premium / Series / Novelas",
+      "protocol": "HLS",
+      "resolution": "1280x720",
+      "resolution_label": "720p",
+      "url": "http://45.162.64.114/TNT_NOVELAS/index.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 35
+    },
+    {
+      "id": "sportv3-mirror",
+      "name": "SporTV 3 (mirror)",
+      "description": "Esporte Grupo Globo: vôlei, lutas, e-sports e reprises. Mirror público 720p, não é o app oficial.",
+      "category": "Premium / Sports",
+      "protocol": "HLS",
+      "resolution": "1280x720",
+      "resolution_label": "720p",
+      "url": "http://170.83.49.66:8083/SPORTV3HD/index.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 76
+    },
+    {
+      "id": "espn-mirror-a07z",
+      "name": "ESPN (mirror a07z)",
+      "description": "Esporte EUA/BR: futebol internacional, NBA, NFL. Mirror 1080p-listed, sem DRM.",
+      "category": "Premium / Sports",
+      "protocol": "HLS",
+      "resolution": "adaptive ~720p/1080p (BANDWIDTH 3067000)",
+      "resolution_label": "720p-1080p",
+      "url": "http://181.78.197.59:8000/play/a07z/index.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 339
+    },
+    {
+      "id": "espn4-mirror-a07n",
+      "name": "ESPN 4 (mirror a07n)",
+      "description": "ESPN 4 alternativo: tênis, futebol europeu, esportes americanos.",
+      "category": "Premium / Sports",
+      "protocol": "HLS",
+      "resolution": "adaptive (BANDWIDTH 2974000)",
+      "resolution_label": "720p-1080p",
+      "url": "http://181.78.197.59:8000/play/a07n/index.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 344
+    },
+    {
+      "id": "terraviva",
+      "name": "Terra Viva (Band)",
+      "description": "Agro do Grupo Bandeirantes. Jornal Terra Viva, leilões e campo.",
+      "category": "Premium-ish / Outdoor / Band",
+      "protocol": "HLS",
+      "resolution": "1280x720",
+      "resolution_label": "720p",
+      "url": "http://45.162.64.114/TERRAVIVA/index.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 65
+    },
+    {
+      "id": "nickelodeon-br-480p",
+      "name": "Nickelodeon Brazil (mirror)",
+      "description": "Kids: Bob Esponja, Patrulha Canina, iCarly. Mirror 480p.",
+      "category": "Premium / Kids",
+      "protocol": "HLS",
+      "resolution": "480p direct segments",
+      "resolution_label": "480p",
+      "url": "https://stmv2.srvif.com/gafeab/gafeab/playlist.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 555
+    },
+    {
+      "id": "nick-classico-pluto",
+      "name": "Nickelodeon Clássico (Pluto FAST via proxy)",
+      "description": "Desenhos clássicos Nick (Rugrats, Hey Arnold). FAST oficial com token rotativo incluso na URL.",
+      "category": "Premium / Kids / FAST",
+      "protocol": "HLS + token query (authToken)",
+      "resolution": "1280x720",
+      "resolution_label": "720p",
+      "url": "https://jmp2.uk/plu-6824ce10c5d53e1351ceb8d1.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 270
+    },
+    {
+      "id": "record-news-pluto",
+      "name": "Record News (Pluto FAST via proxy)",
+      "description": "Versão FAST da Record News na Pluto/Samsung. Jornalismo 24h.",
+      "category": "Premium / News / FAST",
+      "protocol": "HLS + token query (authToken)",
+      "resolution": "1280x720",
+      "resolution_label": "720p",
+      "url": "https://jmp2.uk/plu-6102e04e9ab1db0007a980a1.m3u8",
+      "status": "working",
+      "tested_at_utc": "2026-09-20T14:20:00Z",
+      "http_status": 200,
+      "latency_ms": 2867
+    }
+  ],
+  "failed_excluded": [
+    {
+      "name": "Band Sports / BandNews cdn-5.nxplay",
+      "reason": "403 Forbidden 2026-09-20 - needs referer/token, no stable open HLS"
+    },
+    {
+      "name": "Canal Off 170.82.202.31",
+      "reason": "timeout 2026-09-20"
+    },
+    {
+      "name": "Combate 143.14.134.107",
+      "reason": "403 Forbidden"
+    },
+    {
+      "name": "ESPN3 190.83.2.182",
+      "reason": "timeout"
+    },
+    {
+      "name": "GloboNews 177.52.24.163 / Megapix / GNT / Viva 170.82.202.31",
+      "reason": "timeout 2026-09-20 - host offline"
+    },
+    {
+      "name": "Premiere / Telecine / HBO / SporTV 1-2 official",
+      "reason": "no open HLS in public database - login + Widevine DRM + short-lived IP-bound tokens only"
+    }
+  ]
+}

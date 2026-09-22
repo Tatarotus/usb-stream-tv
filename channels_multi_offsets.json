@@ -1,0 +1,122 @@
+[
+  {
+    "name": "01 - REDE GLOBO.ts",
+    "id": "globo-morena-dourados",
+    "start_cluster": 3,
+    "num_clusters": 14847,
+    "start_sector": 3048,
+    "end_sector": 121824,
+    "start_offset": 1560576,
+    "end_offset": 62373888
+  },
+  {
+    "name": "02 - RECORD NEWS.ts",
+    "id": "record-news",
+    "start_cluster": 14850,
+    "num_clusters": 14847,
+    "start_sector": 121824,
+    "end_sector": 240600,
+    "start_offset": 62373888,
+    "end_offset": 123187200
+  },
+  {
+    "name": "03 - TV CULTURA.ts",
+    "id": "tv-cultura-sp",
+    "start_cluster": 29697,
+    "num_clusters": 14847,
+    "start_sector": 240600,
+    "end_sector": 359376,
+    "start_offset": 123187200,
+    "end_offset": 184000512
+  },
+  {
+    "name": "04 - REDETV NACIONAL.ts",
+    "id": "rede-tv-nacional",
+    "start_cluster": 44544,
+    "num_clusters": 14847,
+    "start_sector": 359376,
+    "end_sector": 478152,
+    "start_offset": 184000512,
+    "end_offset": 244813824
+  },
+  {
+    "name": "05 - REDE BRASIL.ts",
+    "id": "rede-brasil",
+    "start_cluster": 59391,
+    "num_clusters": 14847,
+    "start_sector": 478152,
+    "end_sector": 596928,
+    "start_offset": 244813824,
+    "end_offset": 305627136
+  },
+  {
+    "name": "06 - STUDIO UNIVERSAL.ts",
+    "id": "studio-universal-br",
+    "start_cluster": 74238,
+    "num_clusters": 14847,
+    "start_sector": 596928,
+    "end_sector": 715704,
+    "start_offset": 305627136,
+    "end_offset": 366440448
+  },
+  {
+    "name": "07 - SONY CHANNEL.ts",
+    "id": "sony-channel-br",
+    "start_cluster": 89085,
+    "num_clusters": 14847,
+    "start_sector": 715704,
+    "end_sector": 834480,
+    "start_offset": 366440448,
+    "end_offset": 427253760
+  },
+  {
+    "name": "08 - TNT NOVELAS.ts",
+    "id": "tnt-novelas-br",
+    "start_cluster": 103932,
+    "num_clusters": 14847,
+    "start_sector": 834480,
+    "end_sector": 953256,
+    "start_offset": 427253760,
+    "end_offset": 488067072
+  },
+  {
+    "name": "09 - ESPN.ts",
+    "id": "espn-mirror-a07z",
+    "start_cluster": 118779,
+    "num_clusters": 14847,
+    "start_sector": 953256,
+    "end_sector": 1072032,
+    "start_offset": 488067072,
+    "end_offset": 548880384
+  },
+  {
+    "name": "10 - ESPN 4.ts",
+    "id": "espn4-mirror-b39z",
+    "start_cluster": 133626,
+    "num_clusters": 14847,
+    "start_sector": 1072032,
+    "end_sector": 1190808,
+    "start_offset": 548880384,
+    "end_offset": 609693696
+  },
+  {
+    "name": "11 - TV BRASIL EBC.ts",
+    "id": "tv-brasil-ebc",
+    "start_cluster": 148473,
+    "num_clusters": 14847,
+    "start_sector": 1190808,
+    "end_sector": 1309584,
+    "start_offset": 609693696,
+    "end_offset": 670507008
+  },
+  {
+    "name": "12 - CANAL FUTURA.ts",
+    "id": "canal-futura",
+    "start_cluster": 163320,
+    "num_clusters": 14847,
+    "start_sector": 1309584,
+    "end_sector": 1428360,
+    "start_offset": 670507008,
+    "end_offset": 731320320
+  }
+]

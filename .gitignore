@@ -1,0 +1,22 @@
+# Disk images & large test media
+*.img
+*.mkv
+*.ts
+*.bin
+!fat_template.bin
+
+# Logs & PIDs
+*.log
+*.pid
+tunnel_url.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# Local mounts & binaries
+mnt_img/
+bin/cloudflared
+
+# OS files
+.DS_Store

@@ -1,0 +1,122 @@
+[
+  {
+    "name": "01 - GLOBO RJ CAPITAL FHD.ts",
+    "id": "1000000061",
+    "start_cluster": 6,
+    "start_sector": 3072,
+    "end_sector": 121848,
+    "start_offset": 1572864,
+    "end_offset": 62386176,
+    "size_bytes": 60811608
+  },
+  {
+    "name": "02 - SBT RJ FHD.ts",
+    "id": "1000000211",
+    "start_cluster": 14853,
+    "start_sector": 121848,
+    "end_sector": 240624,
+    "start_offset": 62386176,
+    "end_offset": 123199488,
+    "size_bytes": 60811608
+  },
+  {
+    "name": "03 - RECORD RIO FHD.ts",
+    "id": "1000000179",
+    "start_cluster": 29700,
+    "start_sector": 240624,
+    "end_sector": 359400,
+    "start_offset": 123199488,
+    "end_offset": 184012800,
+    "size_bytes": 60811608
+  },
+  {
+    "name": "04 - BAND RJ FHD.ts",
+    "id": "1000000244",
+    "start_cluster": 44547,
+    "start_sector": 359400,
+    "end_sector": 478176,
+    "start_offset": 184012800,
+    "end_offset": 244826112,
+    "size_bytes": 60811608
+  },
+  {
+    "name": "05 - SPORTV 1 FHD.ts",
+    "id": "1000000609",
+    "start_cluster": 59394,
+    "start_sector": 478176,
+    "end_sector": 596952,
+    "start_offset": 244826112,
+    "end_offset": 305639424,
+    "size_bytes": 60811608
+  },
+  {
+    "name": "06 - SPORTV 2 FHD.ts",
+    "id": "1000000613",
+    "start_cluster": 74241,
+    "start_sector": 596952,
+    "end_sector": 715728,
+    "start_offset": 305639424,
+    "end_offset": 366452736,
+    "size_bytes": 60811608
+  },
+  {
+    "name": "07 - ESPN 1 FHD.ts",
+    "id": "1000000622",
+    "start_cluster": 89088,
+    "start_sector": 715728,
+    "end_sector": 834504,
+    "start_offset": 366452736,
+    "end_offset": 427266048,
+    "size_bytes": 60811608
+  },
+  {
+    "name": "08 - PREMIERE 1 CLUBES FHD.ts",
+    "id": "1000000654",
+    "start_cluster": 103935,
+    "start_sector": 834504,
+    "end_sector": 953280,
+    "start_offset": 427266048,
+    "end_offset": 488079360,
+    "size_bytes": 60811608
+  },
+  {
+    "name": "09 - TELECINE PREMIUM FHD.ts",
+    "id": "1000000540",
+    "start_cluster": 118782,
+    "start_sector": 953280,
+    "end_sector": 1072056,
+    "start_offset": 488079360,
+    "end_offset": 548892672,
+    "size_bytes": 60811608
+  },
+  {
+    "name": "10 - TELECINE ACTION FHD.ts",
+    "id": "1000000528",
+    "start_cluster": 133629,
+    "start_sector": 1072056,
+    "end_sector": 1190832,
+    "start_offset": 548892672,
+    "end_offset": 609705984,
+    "size_bytes": 60811608
+  },
+  {
+    "name": "11 - HBO 1 FHD.ts",
+    "id": "1000000546",
+    "start_cluster": 148476,
+    "start_sector": 1190832,
+    "end_sector": 1309608,
+    "start_offset": 609705984,
+    "end_offset": 670519296,
+    "size_bytes": 60811608
+  },
+  {
+    "name": "12 - MEGAPIX FHD.ts",
+    "id": "1000000497",
+    "start_cluster": 163323,
+    "start_sector": 1309608,
+    "end_sector": 1428384,
+    "start_offset": 670519296,
+    "end_offset": 731332608,
+    "size_bytes": 60811608
+  }
+]

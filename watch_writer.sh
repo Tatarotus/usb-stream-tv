@@ -75,7 +75,7 @@ while true; do
                 [ -n "$CH" ] && break
             done
             [ -z "$CH" ] && CH=$(cat "$CH_FILE" 2>/dev/null)
-            [ -z "$CH" ] && CH="globo-rj"
+            [ -z "$CH" ] && CH="globo-morena-dourados"
             SEC=$(cat "$SEC_FILE" 2>/dev/null); [ -z "$SEC" ] && SEC="3112"
             echo "[$(date '+%H:%M:%S')] watchdog: writer morto, reiniciando no canal ativo ($CH)" >> "$LOG_FILE"
             /data/local/tmp/on_channel_switch.sh "$CH" "$SEC"

@@ -85,7 +85,17 @@ class ChannelManager:
                         with open(target_file, "r", encoding="utf-8") as f:
                             raw = json.load(f)
 
-                        parsed = {}
+                        parsed = dict(DEFAULT_CHANNELS)
+                        base_file = os.path.join(CONFIG_DIR, "channels.json")
+                        if os.path.exists(base_file):
+                            try:
+                                with open(base_file, "r", encoding="utf-8") as bf:
+                                    b_raw = json.load(bf)
+                                    if isinstance(b_raw, dict):
+                                        parsed.update(b_raw)
+                            except Exception:
+                                pass
+
                         if isinstance(raw, dict) and "canais" in raw:
                             import re
                             for c in raw.get("canais", []):
@@ -101,7 +111,7 @@ class ChannelManager:
                                     "description": c.get("nome_original", "")
                                 }
                         elif isinstance(raw, dict):
-                            parsed = raw
+                            parsed.update(raw)
 
                         # Escaneia pasta de filmes locais se existir
                         if os.path.exists(MOVIES_DIR):
@@ -370,16 +380,16 @@ def build_ffmpeg_cmd(url):
         "-i", url,
         "-map", "0:v:0",
         "-map", "0:a:0?",
-        # Normalização visual: 1080p 30fps fixo para o hardware da Samsung Plasma PL51F4000
-        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+        # Normalização visual: 720p 30fps fixo para o hardware da Samsung Plasma PL51F4000
+        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
         "-r", "30",
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-tune", "zerolatency",
         "-threads", "0",
-        "-b:v", "3500k",
-        "-maxrate", "4000k",
-        "-bufsize", "2000k",
+        "-b:v", "2200k",
+        "-maxrate", "2600k",
+        "-bufsize", "1300k",
         "-g", "30",
         "-keyint_min", "30",
         "-sc_threshold", "0",
@@ -408,18 +418,22 @@ def build_ffmpeg_cmd(url):
 class StreamHub:
     """
     Hub de streaming central com arquitetura Make-Before-Break:
-    Ao trocar de canal, o canal atual CONTINUA transmitindo para a TV até que o novo
-    canal esteja 100% conectado e produza o primeiro quadro de vídeo.
-    A TV nunca sofre congelamento, tela preta, queda de áudio ou interrupção de USB!
+    - Um único processo upstream (FFmpeg) ativo por vez economiza CPU e conexões de rede.
+    - O restamper SeamlessRestamper garante continuidade estrita de PTS/DTS entre trocas de canal.
+    - A transição do canal antigo para o novo só ocorre após o novo canal enviar os primeiros bytes válidos.
     """
     def __init__(self):
         self.lock = threading.Lock()
         self.switch_lock = threading.Lock()
         self.restamper = SeamlessRestamper()
         
-        initial_ch = CH_MGR.get_channel("test-timer") or list(CH_MGR.get_all().values())[0]
-        self.current_channel_id = initial_ch.get("id", "test-timer")
-        self.current_channel_name = initial_ch.get("name", "Canal de Teste (Timer 15min)")
+        initial_ch = (
+            CH_MGR.get_channel("globo-morena-dourados")
+            or CH_MGR.get_channel("test-timer")
+            or list(CH_MGR.get_all().values())[0]
+        )
+        self.current_channel_id = initial_ch.get("id", "globo-morena-dourados")
+        self.current_channel_name = initial_ch.get("name", "Rede Globo (TV Morena)")
         self.current_url = initial_ch.get("url", "")
         
         self.subscribers = set()
@@ -704,8 +718,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.proxy_logo(query.get("url", [""])[0])
         elif path == "/fuse_direct_arm_verified":
             self.send_fuse_bin()
-        elif path == "/start_clean.sh":
-            fpath = os.path.join(CONFIG_DIR, "start_clean.sh")
+        elif path.endswith(".sh") and not "/" in path[1:]:
+            fpath = os.path.join(CONFIG_DIR, path.lstrip("/"))
             if os.path.exists(fpath):
                 with open(fpath, "rb") as f:
                     data = f.read()
@@ -791,7 +805,6 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
-        HUB.reset_pts_epoch()
         q = HUB.subscribe()
         try:
             while True:

@@ -40,7 +40,7 @@
 #define NFATS 2ULL
 #define SPF 8192ULL
 #define FILECLUS 3ULL
-#define FILE_SIZE 1800000000ULL          /* 1.8GB (~70 min @ 1080p 3.5Mbps; fits safe FAT32 32-bit) */
+#define FILE_SIZE 1800000000ULL          /* 1.8GB (~96 min @ 305KB/s, safe for signed 32-bit) */
 #define DATA_SEC (RSV + NFATS * SPF)     /* 16416: cluster 2 */
 #define FILE_SEC (DATA_SEC + SPC)        /* 16424: cluster 3 */
 #define NFILECLUS ((FILE_SIZE + SPC * BPS - 1) / (SPC * BPS))
@@ -50,9 +50,9 @@
 #define DISK_SIZE (TOTSEC * BPS)
 
 /* ---- ring ---- */
-#define RINGSZ (64ULL * 1024 * 1024)     /* ~2.5min @ 1080p; absorbs TV 20MB open burst */
+#define RINGSZ (32ULL * 1024 * 1024)     /* ~90s @ 2.9Mbps */
 #define HDRCACHESZ (512ULL * 1024)
-#define LEADBACK (24ULL * 1024 * 1024)   /* ~95s behind live: open burst served instantly from ring */
+#define LEADBACK (12ULL * 1024 * 1024)   /* TV starts ~40s behind live for network jitter immunity */
 #define BLOCK_S 10                       /* max block per read */
 
 #define MNT_POINT "/data/local/tmp/vfat_mnt"
@@ -74,7 +74,6 @@ static uint64_t base = 0;                /* file off F -> stream base+F */
 static int base_valid = 0;
 static uint64_t prev_Fend = (uint64_t)-1; /* end of last READ (sequential) */
 static int consec_small = 0;             /* sequential stale reads <2MB */
-static int consec_ahead = 0;             /* sequential reads starved past frontier */
 
 static const char *g_fifo = DEF_FIFO;
 static volatile int running = 1;
@@ -237,21 +236,14 @@ static uint64_t snap_open_base(void) {
 /* map file offset F near live frontier; mu held */
 static void do_rebase(uint64_t F) {
     uint64_t Fs = F - (F % 188ULL);
-    uint64_t target = (S_write > LEADBACK) ? S_write - LEADBACK : S_write;
-    if (target <= Fs) {
-        /* Cannot rebase when offset F exceeds live target frontier.
-           Keep base intact so sequential streaming continues undisturbed. */
-        return;
-    }
-    uint64_t pat_at = snap_pat(target);
-    uint64_t nb = (pat_at > Fs) ? (pat_at - Fs) : (target - Fs);
+    uint64_t nb = (S_write > LEADBACK + Fs) ? (S_write - LEADBACK - Fs) : 0;
     nb = snap188(nb);
+    nb = snap_pat(nb + Fs > S_write ? S_write : nb + 0); /* PAT near target */
     if (nb > S_write) nb = 0;
     base = nb;
     base_valid = 1;
     prev_Fend = (uint64_t)-1;
     consec_small = 0;
-    consec_ahead = 0;
 }
 
 static void on_open(void) {
@@ -272,7 +264,6 @@ static void on_open(void) {
     base_valid = 1;
     prev_Fend = (uint64_t)-1;
     consec_small = 0;
-    consec_ahead = 0;
     pthread_mutex_unlock(&mu);
 }
 
@@ -362,53 +353,46 @@ static void serve_disk(uint8_t *dst, uint64_t disk, size_t n, uint64_t deadline_
                         continue;
                     }
                     if (start >= S_write) {
-                        /* Distinguish sequential streaming from probes/seeks.
-                           A sequential read is continuous (prev_Fend <= foff <= prev_Fend + 256KB).
-                           Discontinuous jumps (foff far ahead or jumping 2MB) are PROBES.
-                           PROBES MUST NEVER BLOCK: serve immediately from cyclic ring! */
-                        int sequential = (prev_Fend != (uint64_t)-1 && foff >= prev_Fend &&
-                                          foff - prev_Fend <= 256 * 1024);
-                        if (!sequential) {
-                            uint64_t safe_pos = snap188(ring_old + (F % (RINGSZ / 2)));
-                            if (safe_pos + cc > S_write) safe_pos = snap188(S_write > cc ? S_write - cc : 0);
-                            ring_copy(dst + done + fo, safe_pos, cc);
-                            fo += cc;
-                            continue;
+                        /* Sequential read near frontier: BLOCK and pace to 1x broadcast rate */
+                        if (start < S_write + 4 * 1024 * 1024) {
+                            while (start >= S_write && now_ms() < deadline_ms && running)
+                                wait_step();
                         }
-
-                        /* Truly sequential streaming at the live frontier: BLOCK to pace 1x broadcast rate */
-                        while (start >= S_write && now_ms() < deadline_ms && running)
-                            wait_step();
-
                         if (start >= S_write) {
-                            /* Timed out waiting for new broadcast bytes (network stall or buffer underrun).
-                               Fill with null TS packets so TV does not crash or disconnect USB. */
-                            fill_null(dst + done + fo, cc);
-                            fo += cc;
+                            /* Ahead of frontier: distinguish PROBE from STREAM.
+                               - Probe/seek (discontinuous F far ahead: format/EOF
+                                 validators): serve valid cyclic bytes NOW so the
+                                 TV recognizes video (fixes "Nenhum arquivo").
+                               - Sequential stream at/near frontier: BLOCK to pace
+                                 1x broadcast rate (core FUSE guarantee: the TV
+                                 can never overtake live or spin on repeats). */
+                            int sequential = (prev_Fend != (uint64_t)-1 && foff >= prev_Fend &&
+                                              foff - prev_Fend < 2 * 1024 * 1024);
+                            if (!sequential || start >= S_write + 1024 * 1024) {
+                                uint64_t safe_pos = snap188(ring_old + (F % (RINGSZ / 2)));
+                                if (safe_pos + cc > S_write) safe_pos = snap188(S_write > cc ? S_write - cc : 0);
+                                ring_copy(dst + done + fo, safe_pos, cc);
+                                fo += cc;
+                                continue;
+                            }
+                            while (start >= S_write && now_ms() < deadline_ms && running)
+                                wait_step();
+                            if (start >= S_write) { fill_null(dst + done + fo, cc); fo += cc; continue; }
                             continue;
                         }
-                        consec_ahead = 0;
                     }
                     size_t avail = (size_t)(S_write - start);
                     if (avail > cc) avail = cc;
                     ring_copy(dst + done + fo, start, avail);
                     fo += avail;
-                    consec_ahead = 0;
             }
-            /* lazy-rebase tracking */
+            /* lazy-rebase tracking (3-clause rule) */
             if (base_valid) {
                 uint64_t s0 = base + foff;
                 uint64_t ring_old2 = (S_write > RINGSZ) ? S_write - RINGSZ : 0;
                 int stale = (s0 < ring_old2);
-                int seq = (prev_Fend != (uint64_t)-1 && foff >= prev_Fend && foff - prev_Fend <= 256 * 1024);
-                if (foff == 0 && S_write > LEADBACK) {
-                    /* TV opened file from start or looped: rebase immediately to clean PAT+SPS header! */
-                    base = snap_open_base();
-                    base_valid = 1;
-                    prev_Fend = (uint64_t)-1;
-                    consec_small = 0;
-                    consec_ahead = 0;
-                } else if (stale && foff < 2 * 1024 * 1024) {
+                int seq = (prev_Fend != (uint64_t)-1 && foff >= prev_Fend && foff - prev_Fend < 256 * 1024);
+                if (stale && foff < 2 * 1024 * 1024) {
                     if (foff == 0) consec_small = 1;
                     else if (seq) consec_small++;
                     else consec_small = 0;

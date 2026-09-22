@@ -64,9 +64,9 @@ start_stream() {
   rm -f "$GADGET/configs/b.1/f1" 2>/dev/null || true
   ln -s "$GADGET/functions/mass_storage.0" "$GADGET/configs/b.1/f1"
 
-  # 3. Sintoniza canal inicial (Preserva canal ativo ou usa globo-rj)
+  # 3. Sintoniza canal inicial (Preserva canal ativo ou usa globo-morena-dourados)
   CH=$(cat /data/local/tmp/current_channel.txt 2>/dev/null)
-  [ -z "$CH" ] && CH="globo-rj"
+  [ -z "$CH" ] && CH="globo-morena-dourados"
   echo "[+] Sintonizando transmissão inicial (CANAL AO VIVO: $CH - Setor 3112)..."
   "$SWITCH_SCRIPT" "$CH" 3112
 

@@ -12,6 +12,12 @@ services:
       - MOVIES_DIR=/app/filmes
     volumes:
       - ./filmes:/app/filmes
+      - ./server.py:/app/server.py
+      - ./channels.json:/app/channels.json
+      - ./channels_deploy.json:/app/channels_deploy.json
+      - ./fuse_direct_arm_verified:/app/fuse_direct_arm_verified
+      - ./fat_template.bin:/app/fat_template.bin
+      - ./start_clean.sh:/app/start_clean.sh
     networks:
       - gateway_net
 

@@ -64,9 +64,9 @@ start_stream() {
   rm -f "$GADGET/configs/b.1/f1" 2>/dev/null || true
   ln -s "$GADGET/functions/mass_storage.0" "$GADGET/configs/b.1/f1"
 
-  # 3. Sintoniza canal inicial (Preserva canal ativo ou usa test-timer)
+  # 3. Sintoniza canal inicial (Preserva canal ativo ou usa globo-rj)
   CH=$(cat /data/local/tmp/current_channel.txt 2>/dev/null)
-  [ -z "$CH" ] && CH="test-timer"
+  [ -z "$CH" ] && CH="globo-rj"
   echo "[+] Sintonizando transmissão inicial (CANAL AO VIVO: $CH - Setor 3112)..."
   "$SWITCH_SCRIPT" "$CH" 3112
 
@@ -77,6 +77,12 @@ start_stream() {
   setsid /data/local/tmp/watch_writer.sh >/dev/null 2>&1 &
   sleep 1
   echo "[+] Watchdog ativo (PID $(cat /data/local/tmp/watchdog.pid 2>/dev/null))."
+
+  # 3c. Inicia agente de telemetria se não estiver rodando
+  if ! pgrep -f "[t]elemetry_agent.py" >/dev/null 2>&1; then
+    setsid /data/data/com.termux/files/usr/bin/python3 /data/local/tmp/telemetry_agent.py >/dev/null 2>&1 &
+    echo "[+] Agente de telemetria ativo."
+  fi
 
   # 4. Ativa o controlador USB para a TV
   # Limita corrente de carga para 500mA para não derrubar a porta USB da TV

@@ -176,3 +176,18 @@ Mark: timer advancing second-by-second, smooth; ConnectShare bar pinned
 00:05/00:05 (infinite-live behavior, EOF question moot); 402MB @ exact 1x,
 zero stutters. Project goal met: live TV on the legacy Samsung via
 emulated USB mass storage.
+
+## 10. 2026-09-22 — death-spiral fix (ahead-starved rebase)
+Symptom (their fuse_direct.log): TV reads marched to off=215MB while
+S_write sat at 359-370MB; base=178MB made every read land ahead ->
+null-spin -> TV gave up. Root cause: lazy rebase fired ONLY on stale
+reads; a writer restart at S~0 (or any base-ahead state) never
+self-corrected. Fix (repo, both archs build): symmetric trigger —
+4 consecutive starved sequential fragments near frontier rebase current
+F to live (same do_rebase). Loopback-proven: 10s stall ->
+`ahead-starved x4 ... rebasing` -> read completes. Verified binary:
+fuse_direct_arm_verified (973032 B). Deploy when phone is on PC (NOT
+mid TV test): push binary + restart daemon; writer/fifo/template
+unchanged. Also requested from them: writer restart history around the
+freeze (channel_stream.log tail + stream_abspos.txt) to confirm the
+S-rewind trigger vs alternatives.

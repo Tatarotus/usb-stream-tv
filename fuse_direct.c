@@ -74,6 +74,7 @@ static uint64_t base = 0;                /* file off F -> stream base+F */
 static int base_valid = 0;
 static uint64_t prev_Fend = (uint64_t)-1; /* end of last READ (sequential) */
 static int consec_small = 0;             /* sequential stale reads <2MB */
+static int consec_ahead = 0;             /* sequential reads starved past frontier */
 
 static const char *g_fifo = DEF_FIFO;
 static volatile int running = 1;
@@ -244,6 +245,7 @@ static void do_rebase(uint64_t F) {
     base_valid = 1;
     prev_Fend = (uint64_t)-1;
     consec_small = 0;
+    consec_ahead = 0;
 }
 
 static void on_open(void) {
@@ -264,6 +266,7 @@ static void on_open(void) {
     base_valid = 1;
     prev_Fend = (uint64_t)-1;
     consec_small = 0;
+    consec_ahead = 0;
     pthread_mutex_unlock(&mu);
 }
 
@@ -377,7 +380,25 @@ static void serve_disk(uint8_t *dst, uint64_t disk, size_t n, uint64_t deadline_
                             }
                             while (start >= S_write && now_ms() < deadline_ms && running)
                                 wait_step();
-                            if (start >= S_write) { fill_null(dst + done + fo, cc); fo += cc; continue; }
+                            if (start >= S_write) {
+                                /* Still starved: possible mapping death spiral
+                                   (e.g. writer restarted at S=0 while base maps
+                                   far ahead). Count consecutive starved
+                                   sequential reads; after 4 (~512KB) rebase
+                                   current F to the live frontier instead of
+                                   null-spinning forever. Probes (non-seq/far)
+                                   never touch this counter. */
+                                consec_ahead++;
+                                if (consec_ahead >= 4) {
+                                    consec_ahead = 0;
+                                    fprintf(stderr, "[FUSE] ahead-starved x4 at F=%llu S=%llu, rebasing\n",
+                                            (unsigned long long)F, (unsigned long long)S_write);
+                                    do_rebase(F);
+                                    continue; /* re-evaluate with fresh base */
+                                }
+                                fill_null(dst + done + fo, cc); fo += cc; continue;
+                            }
+                            consec_ahead = 0;
                             continue;
                         }
                     }
@@ -385,6 +406,7 @@ static void serve_disk(uint8_t *dst, uint64_t disk, size_t n, uint64_t deadline_
                     if (avail > cc) avail = cc;
                     ring_copy(dst + done + fo, start, avail);
                     fo += avail;
+                    consec_ahead = 0;
             }
             /* lazy-rebase tracking (3-clause rule) */
             if (base_valid) {

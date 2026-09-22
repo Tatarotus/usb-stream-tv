@@ -62,13 +62,13 @@ while true; do
         if ! is_alive; then
             CH=""
             TUNNEL_URL=$(cat "$URL_FILE" 2>/dev/null | tr -d '\r\n')
-            for CAND in "http://127.0.0.1:8080" "http://192.168.1.5:8080" "http://192.168.1.8:8080" "$TUNNEL_URL"; do
+            for CAND in "$TUNNEL_URL" "http://127.0.0.1:8080" "http://192.168.1.5:8080" "http://192.168.1.8:8080"; do
                 [ -z "$CAND" ] && continue
                 CH=$("$PYTHON" -c "import urllib.request,json,sys; print(json.load(urllib.request.urlopen('$CAND/api/status', timeout=3))['active_channel_id'])" 2>/dev/null)
                 [ -n "$CH" ] && break
             done
             [ -z "$CH" ] && CH=$(cat "$CH_FILE" 2>/dev/null)
-            [ -z "$CH" ] && CH="globo-morena-dourados"
+            [ -z "$CH" ] && CH="globo-rj"
             SEC=$(cat "$SEC_FILE" 2>/dev/null); [ -z "$SEC" ] && SEC="3112"
             echo "[$(date '+%H:%M:%S')] watchdog: writer morto, reiniciando no canal ativo ($CH)" >> "$LOG_FILE"
             /data/local/tmp/on_channel_switch.sh "$CH" "$SEC"

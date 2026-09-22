@@ -422,6 +422,11 @@ class StreamHub:
         self.total_bytes = 0
         self.start_time = time.time()
         self.last_chunk_time = time.time()
+        self.client_telemetry = {}
+        self.telemetry_time = 0
+        self.pending_command = None
+        self.command_output = None
+        self.command_done_event = threading.Event()
         
         # Inicia transmissão do primeiro canal
         self._start_initial()
@@ -693,6 +698,12 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.handle_switch()
         elif path == "/api/sync":
             self.handle_sync()
+        elif path == "/api/telemetry":
+            self.handle_telemetry()
+        elif path == "/api/telemetry_result":
+            self.handle_telemetry_result()
+        elif path == "/api/exec":
+            self.handle_remote_exec()
         else:
             self.send_error(404, "Not Found")
 
@@ -748,6 +759,11 @@ class RequestHandler(BaseHTTPRequestHandler):
             HUB.unsubscribe(q)
 
     def send_status_json(self):
+        client_data = None
+        if HUB.client_telemetry:
+            client_data = dict(HUB.client_telemetry)
+            client_data["last_seen_secs"] = round(time.time() - HUB.telemetry_time, 1)
+
         data = {
             "active_channel_id": HUB.current_channel_id,
             "active_channel_name": HUB.current_channel_name,
@@ -755,7 +771,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             "listeners": len(HUB.subscribers),
             "in_standby": HUB.in_standby,
             "total_mb": round(HUB.total_bytes / (1024 * 1024), 2),
-            "uptime_secs": int(time.time() - HUB.start_time)
+            "uptime_secs": int(time.time() - HUB.start_time),
+            "client": client_data
         }
         res = json.dumps(data).encode("utf-8")
         self.send_response(200)
@@ -827,6 +844,63 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps({"success": True, "message": "Sincronização iniciada."}).encode("utf-8"))
+
+    def handle_telemetry(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8")
+        try:
+            data = json.loads(body)
+            HUB.client_telemetry = data
+            HUB.telemetry_time = time.time()
+            cmd = HUB.pending_command
+            HUB.pending_command = None
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True, "cmd": cmd}).encode("utf-8"))
+        except Exception as e:
+            self.send_response(400)
+            self.end_headers()
+
+    def handle_telemetry_result(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8")
+        try:
+            data = json.loads(body)
+            HUB.command_output = data.get("output")
+            HUB.command_done_event.set()
+            self.send_response(200)
+            self.end_headers()
+        except Exception:
+            self.send_response(400)
+            self.end_headers()
+
+    def handle_remote_exec(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8")
+        try:
+            params = json.loads(body)
+        except Exception:
+            params = {}
+        req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
+        if AUTH_PIN and req_pin != AUTH_PIN:
+            self.send_response(401)
+            self.end_headers()
+            return
+        cmd = params.get("cmd")
+        if not cmd:
+            self.send_response(400)
+            self.end_headers()
+            return
+        HUB.command_done_event.clear()
+        HUB.command_output = None
+        HUB.pending_command = cmd
+        HUB.command_done_event.wait(timeout=10.0)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps({"success": True, "output": HUB.command_output or "Timeout aguardando aparelho (está online?)."}).encode("utf-8"))
 
     def send_dashboard(self):
         tunnel_url = "http://localhost:8080"
@@ -1232,7 +1306,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             </div>
             <div class="now-meta">
                 <div id="traffic-text" style="font-weight: 700; color: #fff;">0 MB</div>
-                <div style="font-size: 10px;">Enviado</div>
+                <div style="font-size: 10px;">Enviado VPS</div>
+                <div id="client-lead-badge" style="font-size: 10px; color: #38bdf8; margin-top: 4px; display: none;"></div>
             </div>
         </div>
 
@@ -1532,15 +1607,29 @@ class RequestHandler(BaseHTTPRequestHandler):
 
                 const tvPill = document.getElementById('tv-status');
                 const tvText = document.getElementById('tv-status-text');
-                if (data.in_standby) {{
+                const leadBadge = document.getElementById('client-lead-badge');
+                if (data.client && data.client.last_seen_secs < 8) {{
+                    const c = data.client;
+                    tvPill.className = 'status-pill';
+                    const leadStr = c.lead_mb > 0 ? ` +${{c.lead_mb}}MB` : '';
+                    tvText.innerText = `TV Lendo (${{leadStr || 'Ao vivo'}})`;
+                    if (leadBadge) {{
+                        leadBadge.style.display = 'block';
+                        const fuseRead = c.fuse ? (c.fuse.total_read || '0MB') : '0MB';
+                        leadBadge.innerText = `Aparelho: ${{c.writer_mb}}MB | TV: ${{fuseRead}}`;
+                    }}
+                }} else if (data.in_standby) {{
                     tvPill.className = 'status-pill standby';
                     tvText.innerText = 'Standby (Eco)';
+                    if (leadBadge) leadBadge.style.display = 'none';
                 }} else if (data.listeners > 0) {{
                     tvPill.className = 'status-pill';
                     tvText.innerText = 'TV Conectada (1080p)';
+                    if (leadBadge) leadBadge.style.display = 'none';
                 }} else {{
                     tvPill.className = 'status-pill waiting';
                     tvText.innerText = 'Aguardando TV';
+                    if (leadBadge) leadBadge.style.display = 'none';
                 }}
 
                 if (currentActiveId !== data.active_channel_id) {{

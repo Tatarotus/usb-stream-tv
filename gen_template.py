@@ -11,7 +11,7 @@ import struct
 BPS, SPC, RSV, FATS, SPF = 512, 8, 32, 2, 8192
 DATA_SEC = RSV + FATS * SPF          # 16416: cluster 2 (root dir)
 FILE_SEC = DATA_SEC + SPC            # 16424: cluster 3 (file data)
-FILE_SIZE = 1800000000               # 1.8 GB (~96 min @ 305KB/s, completely safe for signed 32-bit FAT32)
+FILE_SIZE = 1800000000                  # 1.8 GB (~70 min @ 1080p 3.5Mbps; fits safe FAT32 32-bit)
 NFILECLUS = (FILE_SIZE + SPC * BPS - 1) // (SPC * BPS)
 TOTAL_CLUS = 1048576                 # clusters 0..1048575
 TOTAL_SEC = DATA_SEC + (TOTAL_CLUS - 2) * SPC

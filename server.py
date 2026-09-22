@@ -204,6 +204,15 @@ class SeamlessRestamper:
         self.last_out_pts = None
         self.prev_in_pts = None
 
+    def reset_epoch(self):
+        self.first_pts_in_epoch = None
+        self.target_base_pts = 270000
+        self.max_pts_seen = 90000
+        self.last_out_pts = None
+        self.prev_in_pts = None
+        self.pts_offset = None
+        log_event("PTS_EPOCH_RESET (target_base_pts=270000)")
+
     def start_new_channel(self):
         self.first_pts_in_epoch = None
         self.target_base_pts = self.max_pts_seen + 3000
@@ -453,9 +462,15 @@ class StreamHub:
         except Exception as e:
             print(f"[!] Erro ao iniciar processo inicial: {e}")
 
+    def reset_pts_epoch(self):
+        with self.lock:
+            self.restamper.reset_epoch()
+
     def subscribe(self):
         q = queue.Queue(maxsize=300)
         with self.lock:
+            if len(self.subscribers) == 0:
+                self.restamper.reset_epoch()
             self.subscribers.add(q)
             self.idle_since = None
             if self.in_standby:
@@ -687,6 +702,32 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_groups_json()
         elif path == "/api/logo":
             self.proxy_logo(query.get("url", [""])[0])
+        elif path == "/fuse_direct_arm_verified":
+            self.send_fuse_bin()
+        elif path == "/start_clean.sh":
+            fpath = os.path.join(CONFIG_DIR, "start_clean.sh")
+            if os.path.exists(fpath):
+                with open(fpath, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            self.send_error(404)
+        elif path == "/fat_template.bin":
+            fpath = os.path.join(CONFIG_DIR, "fat_template.bin")
+            if os.path.exists(fpath):
+                with open(fpath, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            self.send_error(404)
         else:
             self.send_error(404, "Not Found")
 
@@ -704,6 +745,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.handle_telemetry_result()
         elif path == "/api/exec":
             self.handle_remote_exec()
+        elif path == "/api/reset_epoch":
+            self.handle_reset_epoch()
         else:
             self.send_error(404, "Not Found")
 
@@ -748,6 +791,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
+        HUB.reset_pts_epoch()
         q = HUB.subscribe()
         try:
             while True:
@@ -901,6 +945,38 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(json.dumps({"success": True, "output": HUB.command_output or "Timeout aguardando aparelho (está online?)."}).encode("utf-8"))
+
+    def handle_reset_epoch(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+        try:
+            params = json.loads(body)
+        except Exception:
+            params = {}
+        req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
+        if AUTH_PIN and req_pin != AUTH_PIN:
+            self.send_response(401)
+            self.end_headers()
+            return
+        HUB.reset_pts_epoch()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps({"success": True, "message": "PTS epoch reset to 3.0s"}).encode("utf-8"))
+
+    def send_fuse_bin(self):
+        fpath = os.path.join(CONFIG_DIR, "fuse_direct_arm_verified")
+        if not os.path.exists(fpath):
+            self.send_error(404, "Binary not found")
+            return
+        with open(fpath, "rb") as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def send_dashboard(self):
         tunnel_url = "http://localhost:8080"

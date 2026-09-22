@@ -15,9 +15,9 @@ import time
 FILE_PATH = "/run/media/sam/LIVETV/TV AO VIVO.ts"
 if not os.path.exists(FILE_PATH) and os.path.exists("/run/media/sam/LIVETV/CANAL AO VIVO.ts"):
     FILE_PATH = "/run/media/sam/LIVETV/CANAL AO VIVO.ts"
-FILE_SIZE = 62758912   # Exact packet-aligned size: 333824 * 188
+FILE_SIZE = 1800000000   # 1.8 GB virtual live disk
 BLOCK_SIZE = 192512    # LCM(188, 4096): 1024 TS packets, 47 FAT32 clusters
-BYTES_PER_SEC = 305000 # 2.44 Mbps (exact matching rate of the stream)
+BYTES_PER_SEC = 450000 # ~3.6 Mbps (1080p 30fps rate)
 
 def main():
     target = FILE_PATH

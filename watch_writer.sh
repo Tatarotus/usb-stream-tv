@@ -36,7 +36,13 @@ check_gadget() {
     CURRENT_UDC=$(cat "$GADGET/UDC" 2>/dev/null)
     UDC_NAME=$(getprop sys.usb.controller)
 
-    if [ "$CURRENT_F1" != "$GADGET/functions/mass_storage.0" ] || [ -z "$CURRENT_UDC" ]; then
+    # Aceita tanto caminho absoluto quanto relativo (../../mass_storage.0)
+    case "$CURRENT_F1" in
+        *mass_storage.0) F1_OK=1 ;;
+        *) F1_OK=0 ;;
+    esac
+
+    if [ "$F1_OK" -ne 1 ] || [ -z "$CURRENT_UDC" ]; then
         if [ -f "$BACKING_IMG" ]; then
             echo "[$(date '+%H:%M:%S')] watchdog: Gadget USB desconectado pelo Android. Restaurando LIVETV..." >> "$LOG_FILE"
             echo "" > "$GADGET/UDC" 2>/dev/null || true
@@ -44,8 +50,9 @@ check_gadget() {
             echo 1 > "$GADGET/functions/mass_storage.0/lun.0/removable" 2>/dev/null || true
             echo 0 > "$GADGET/functions/mass_storage.0/lun.0/ro" 2>/dev/null || true
             echo "LIVETV" > "$GADGET/functions/mass_storage.0/lun.0/inquiry_string" 2>/dev/null || true
-            rm -f "$GADGET/configs/b.1/f1" 2>/dev/null || true
+            rm -f "$GADGET/configs/b.1/f1" "$GADGET/configs/b.1/f2" 2>/dev/null || true
             ln -s "$GADGET/functions/mass_storage.0" "$GADGET/configs/b.1/f1" 2>/dev/null || true
+            [ -d "$GADGET/functions/ffs.adb" ] && ln -s "$GADGET/functions/ffs.adb" "$GADGET/configs/b.1/f2" 2>/dev/null || true
             echo 500000 > /sys/class/power_supply/usb/current_max 2>/dev/null || true
             echo "$UDC_NAME" > "$GADGET/UDC" 2>/dev/null || true
         fi

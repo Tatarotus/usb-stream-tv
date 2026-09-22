@@ -1,0 +1,16 @@
+[Unit]
+Description=USB Stream TV cloudflare tunnel
+After=usb-tv-server.service
+BindsTo=usb-tv-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/sam/Code/usb-stream-tv
+ExecStart=/home/sam/Code/usb-stream-tv/bin/cloudflared tunnel --url http://127.0.0.1:8080
+StandardOutput=append:/home/sam/Code/usb-stream-tv/tunnel.log
+StandardError=inherit
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

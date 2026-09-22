@@ -1,0 +1,12 @@
+[Unit]
+Description=USB Stream TV adb reverse keepalive
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/home/sam/Code/usb-stream-tv/keep-adb-reverse.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

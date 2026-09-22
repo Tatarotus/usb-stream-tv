@@ -1,0 +1,14 @@
+[Unit]
+Description=USB Stream TV server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/sam/Code/usb-stream-tv
+ExecStart=/usr/bin/python3 /home/sam/Code/usb-stream-tv/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

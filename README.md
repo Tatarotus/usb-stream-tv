@@ -25,7 +25,7 @@ Durante o desenvolvimento deste projeto, superamos diversas barreiras de hardwar
 
 ### 1. FUSE Direct em RAM (Zero Desgaste de Memória Flash)
 * **O Problema:** Gravar 2.5 Mbps de vídeo continuamente na memória flash interna do celular causaria engasgos de I/O e destruiria o chip de memória eMMC/UFS em poucos meses devido ao limite de ciclos de escrita.
-* **A Solução:** Criamos o motor `fuse_direct.c` em C estático. Ele sintetiza um disco virtual FAT32 de 4 GB **100% na memória RAM**. Os setores do vídeo são servidos sob demanda a partir de um anel circular (*ring buffer*) de 32 MB. **Zero bytes são gravados na memória física do aparelho**.
+* **A Solução:** Criamos o motor `fuse_direct.c` em C estático. Ele sintetiza um disco virtual FAT32 de 4 GB **100% na memória RAM**. Os setores do vídeo são servidos sob demanda a partir de um anel circular (*ring buffer*) de 32 MB. **Nenhum byte de vídeo toca o flash do aparelho** (apenas logs de texto de alguns KB em `/data/local/tmp/*.log`).
 
 ### 2. Superação da Sonda do ConnectShare ("Nenhum Arquivo de Vídeo Encontrado")
 * **O Problema:** Antes de exibir qualquer vídeo na lista, o player ConnectShare da Samsung realiza leituras de validação de contêiner lendo nos primeiros 10% do arquivo e próximo ao final (EOF). Se essas leituras retornarem zeros ou pacotes nulos (0x1FFF), a TV declara o arquivo inválido e exibe *"Nenhum arquivo de vídeo encontrado"*.
@@ -49,9 +49,9 @@ Durante o desenvolvimento deste projeto, superamos diversas barreiras de hardwar
 ### 6. Sincronização Atômica "Make-Before-Break"
 * **O Funcionamento:** Ao trocar de canal via interface web (`/api/switch`), o canal anterior **continua transmitindo para a TV** enquanto o novo canal conecta e transcodifica os primeiros quadros em segundo plano. A substituição do fluxo é feita atomicamente no primeiro quadro decodificável (IDR/SPS), garantindo **zero tela preta, zero congelamento e zero interrupção de USB**.
 
-### 7. Auto-Cura do Gadget USB contra Desligamento da TV
-* **O Problema:** Quando a TV é desligada ou colocada em standby, o corte de energia da porta USB (queda do VBUS) faz o framework do Android restaurar o gadget USB para o modo padrão (`MTP` ou `Apenas Carregamento`), quebrando o pendrive virtual.
-* **A Solução:** O watchdog `watch_writer.sh` monitora o gadget USB a cada 5 segundos. Se o Android desconectar a LUN ou desvincular o UDC, o script remonta o Mass Storage e restabelece a conexão USB automaticamente. Ao ligar a TV, o pendrive virtual já está pronto.
+### 7. Supervisão do Gravador contra Morte por Falta de RAM (Watchdog)
+* **O Problema:** Com ~84 MB livres (medido no Mi A2), o *Low Memory Killer* do Android mata o `stream_writer.py` sem aviso. Sem ele, a TV congela no último quadro gravado. (Atenção: o watchdog supervisiona o **gravador**, não o gadget USB — ver seção 7.)
+* **A Solução:** O `watch_writer.sh` (rodando como root, blindado contra o LMK com `oom_score_adj=-1000`) verifica o gravador a cada 15 segundos e o reinicia em até ~15 s. Ao reiniciar, ele primeiro pergunta ao servidor qual é o canal **ativo** (`/api/status`) para nunca puxar a sintonia de volta após uma troca via web remote.
 
 ### 8. Amortecedor de Pacing (`LEADBACK = 12 MB`)
 * **O Funcionamento:** A TV lê com uma margem de segurança de **12 MB (~40 segundos)** atrás da escrita ao vivo no anel de RAM de 32 MB. Essa folga atua como um amortecedor hidráulico perfeito, absorvendo oscilações de Wi-Fi, reconexões de rede ou latências de CDN sem que a TV sofra travamentos.
@@ -69,11 +69,10 @@ flowchart LR
     end
 
     subgraph Celular Android com Root
-        HTTP -->|Wi-Fi / LAN| WRITER["stream_writer.py (Cliente HTTP)"]
-        WRITER -->|Pipe FIFO| FUSE["fuse_direct (Motor C em RAM)"]
+        HTTP -->|Túnel Cloudflare (HTTPS) ou ADB reverse (127.0.0.1:8080)| WRITER["stream_writer.py --fifo (Cliente HTTP)"]
+        WRITER -->|Pipe FIFO /data/local/tmp/live_pipe| FUSE["fuse_direct (Motor C em RAM)"]
         FUSE -->|Buffer 32MB| GADGET["USB ConfigFS (mass_storage.0)"]
-        WATCHDOG["watch_writer.sh (Auto-Cura)"] -.->|Supervisiona| WRITER
-        WATCHDOG -.->|Supervisiona| GADGET
+        WATCHDOG["watch_writer.sh (vigia o gravador, 15s)"] -.->|Reinicia se morrer| WRITER
     end
 
     subgraph TV Samsung
@@ -99,6 +98,7 @@ Este guia permite que qualquer outro desenvolvedor ou agente de IA replique este
    * Aparelho Android com acesso **Root** (Magisk ou SuperSU).
    * Suporte a USB ConfigFS com módulo `mass_storage` no kernel (comum em Android 6 a 10).
    * Aplicativo **Termux** instalado.
+   * **RAM livre ≥ 100 MB** (medido: o anel de 32 MB + Python + Android precisam de folga; com ~84 MB livres o LMK já matava o gravador sem o watchdog — confira com `free -m`).
    * Cabo USB de boa qualidade conectado à porta USB da TV.
 
 ---
@@ -110,16 +110,17 @@ Este guia permite que qualquer outro desenvolvedor ou agente de IA replique este
    git clone https://github.com/Tatarotus/usb-stream-tv.git
    cd usb-stream-tv
    ```
-2. Verifique se o FFmpeg e Python 3 estão instalados:
+2. Verifique se o FFmpeg, Python 3 e o compilador cruzado ARM estão instalados:
    ```bash
-   sudo apt update && sudo apt install -y ffmpeg python3 python3-pip
+   sudo apt update && sudo apt install -y ffmpeg python3 python3-pip gcc-aarch64-linux-gnu
    ```
+   *(O `gcc-aarch64-linux-gnu` é obrigatório: o `fuse_direct` roda no celular ARM e precisa ser compilado com `-static`.)*
 3. Configure seus canais no arquivo `channels.json` (já vem com lista pronta e testada).
 4. Inicie o servidor:
    ```bash
    python3 server.py
    ```
-   *(Ou execute em segundo plano via systemd com o arquivo `usb-tv-server.service`).*
+   *(Ou execute em segundo plano via systemd com os arquivos em `systemd/` — copie para `~/.config/systemd/user/` e rode `systemctl --user enable --now usb-tv-server usb-tv-tunnel usb-tv-reverse`. Atenção: o túnel Cloudflare gera uma URL nova a cada reinício; anote a URL atual em `tunnel_url.txt` e atualize o `server_url.txt` no celular.)*
 5. O painel web estará disponível na porta `8080`:
    * Dashboard e Controle Remoto: `http://SEU_IP_OU_VPS:8080/`
    * Stream contínuo: `http://SEU_IP_OU_VPS:8080/live.ts`
@@ -155,26 +156,33 @@ Esse script:
 3. Envia o binário, templates e scripts para `/data/local/tmp/` no celular (< 1 MB total).
 4. Cria o comando de atalho `./tv` no diretório inicial do Termux.
 
+> **Atenção:** o deploy só *envia* os arquivos — nada é iniciado. A ordem de boot no celular é rígida: primeiro o daemon (`fuse_direct`, que abre o FIFO para leitura), depois o gravador. O `./tv start` do Passo 4 faz exatamente isso; não inverta.
+
 ---
 
 ### Passo 4: Conectar na TV e Iniciar a Transmissão
 
-1. Conecte o celular na porta **USB** da TV Samsung usando um cabo USB.
+> **CRÍTICO — ordem obrigatória:** o Android **desfaz** o USB Mass Storage e restaura MTP **toda vez** que o cabo USB é reconectado. Por isso configure o gadget **DEPOIS** de plugar na TV, nunca antes. Se a TV mostrar só carregamento ou "nenhum dispositivo", o gadget foi revertido — rode `./tv start` de novo com o cabo já na TV.
+
+1. Conecte o celular na porta **USB** da TV Samsung usando um cabo USB **com fios de dados** (cabos só-de-carga não funcionam; teste o cabo antes com `adb devices` no PC).
 2. No celular, abra o aplicativo **Termux** e execute:
    ```bash
    su
    ./tv start http://IP_DA_SUA_VPS:8080
    ```
+   *(Com Cloudflare Tunnel, use a URL do túnel em vez do IP — e lembre-se de que ela muda a cada reinício do túnel; veja a seção 7.)*
 3. O script irá:
    * Inicializar o motor `fuse_direct` em RAM.
    * Conectar o `stream_writer.py` ao servidor de streaming.
    * Configurar o USB Gadget como pendrive `LIVETV`.
    * Ativar o watchdog de auto-cura.
+   * Pré-encher ~15 segundos de buffer antes de liberar o USB (não abra o arquivo na TV antes disso).
 4. **Na TV Samsung Plasma:**
    * Pressione a tecla **Source** no controle remoto da TV e selecione **USB (LIVETV)**.
    * Entre na pasta **Vídeos**.
    * Abra o arquivo **`TV AO VIVO.ts`**.
    * Pressione **Play**!
+   * Se a TV oferecer "retomar de onde parou", escolha **Não** (a posição salva aponta para dados antigos do buffer circular).
    * *(Opcional)*: Pressione a tecla **Tools** no controle da TV -> *Modo de Repetição* -> *Repetir 1* para garantir reprodução 24h contínua.
 
 ---
@@ -200,9 +208,14 @@ Para mudar de canal:
 ├── gen_template.py         # Gerador de setores estáticos FAT32 (Boot, FSInfo, Diretório)
 ├── fat_template.bin        # Template binário compacto do sistema de arquivos FAT32 (5.5 KB)
 ├── stream_writer.py        # Gravador Python: consome HTTP e alimenta o FIFO em RAM
-├── watch_writer.sh         # Watchdog: monitora o gravador e restaura o gadget USB
+├── watch_writer.sh         # Watchdog: reinicia o gravador em ≤15s se o LMK matar (somente gravador)
 ├── usb_tv.sh               # Script mestre de controle no celular (./tv start|stop|status)
+├── on_channel_switch.sh    # Sonda servidor (USB→LAN→túnel) e (re)inicia o gravador no canal
+├── prefill_head.py         # Utilitário: pré-grava 16MB ao vivo no início do arquivo (modo legado)
 ├── deploy_to_phone.sh      # Script de compilação cruzada e deploy automático via ADB
+├── deploy_fixed.sh         # Deploy da variante legada (imagem estática + writer por setores)
+├── systemd/                # Unidades user: usb-tv-{server,tunnel,reverse}.service
+├── fuse_direct_SPEC.md     # Especificação de arquitetura do motor FUSE (leitura obrigatória p/ devs)
 ├── channels.json           # Grade de canais IPTV com metadados e logos
 ├── sync_iptv.py            # Atualizador e validador automático de streams IPTV
 ├── keep-adb-reverse.sh     # Manutenção de túnel de desenvolvimento local ADB
@@ -216,9 +229,15 @@ Para mudar de canal:
 | Sintoma | Causa Provável | Solução |
 | :--- | :--- | :--- |
 | **A TV exibe "Nenhum arquivo"** | Leitura de validação do ConnectShare retornou dados vazios. | Certifique-se de que o `fuse_direct` está rodando e o template `fat_template.bin` está presente em `/data/local/tmp/`. |
-| **O celular apenas carrega na TV** | A TV foi desligada e o Android desfez o Mass Storage. | O script `watch_writer.sh` atualizado restaura em até 5s. Ou rode `./tv start` no Termux. |
-| **O vídeo congela após alguns minutos** | Buffer de leitura esgotou por oscilação de Wi-Fi. | O `LEADBACK` de 12 MB no `fuse_direct.c` previne isso. Garanta que o sinal Wi-Fi no celular esteja forte. |
+| **O celular apenas carrega na TV** | O Android desfez o Mass Storage (acontece em **todo** replug de cabo, e ao desligar a TV). O watchdog **não** monitora o gadget, só o gravador. | Rode `./tv start` no Termux **com o cabo já plugado na TV**. |
+| **O vídeo congela após alguns minutos** | (a) Gravador morto pelo LMK; (b) salto de timestamp da fonte; (c) Wi-Fi fraco. | (a) `./tv status` — o watchdog já deve ter reiniciado; confira `channel_stream.log`. (b) Confira `server_events.log` por `PTS_JUMP`/`PTS_REBASE` — o servidor suaviza sozinho. (c) O `LEADBACK` de 12 MB absorve oscilações curtas; garanta Wi-Fi forte. |
 | **Áudio mudo na TV** | Codec de áudio incompatível. | O `server.py` converte obrigatoriamente para AC3 (Dolby Digital) a 48 kHz, compatível com 100% das TVs Samsung. |
+| **Imagem antiga/congelada ao abrir** | Posição de resume salva pela TV, ou gravador parado. | Recuse "retomar", reabra do zero. Se persistir: `./tv status` no Termux e confira timestamps em `channel_stream.log`. |
+| **Duração absurda no player (ex.: 26h)** | Salto de timestamp da fonte ao vivo. | O `SeamlessRestamper` registra em `server_events.log` e suaviza; aguarde uma volta do buffer (~3 min). |
+| **Gravador em loop de reconexão** | URL do túnel expirou (muda a cada reinício do cloudflared) ou `adb reverse` caiu. | Atualize `/data/local/tmp/server_url.txt` com a URL atual de `tunnel_url.txt`; no PC, confira `systemctl --user status usb-tv-reverse`. |
+| **PC não monta / adb sumiu após mexer no USB** | Todo `echo none > .../UDC` derruba o transporte ADB até re-enumerar. | Aguarde ~10 s e `adb wait-for-device`. Nunca assuma ADB vivo logo após reconfigurar o gadget. |
+
+> **⚠️ Aviso de segurança:** este repositório é público e o `channels.json` contém URLs de providers IPTV (possivelmente com credenciais). Antes de publicar um fork, remova credenciais e use variáveis de ambiente ou arquivo local ignorado pelo git.
 
 ---
 

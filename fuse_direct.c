@@ -353,33 +353,17 @@ static void serve_disk(uint8_t *dst, uint64_t disk, size_t n, uint64_t deadline_
                         continue;
                     }
                     if (start >= S_write) {
-                        /* Sequential read near frontier: BLOCK and pace to 1x broadcast rate */
-                        if (start < S_write + 4 * 1024 * 1024) {
-                            while (start >= S_write && now_ms() < deadline_ms && running)
-                                wait_step();
-                        }
-                        if (start >= S_write) {
-                            /* Ahead of frontier: distinguish PROBE from STREAM.
-                               - Probe/seek (discontinuous F far ahead: format/EOF
-                                 validators): serve valid cyclic bytes NOW so the
-                                 TV recognizes video (fixes "Nenhum arquivo").
-                               - Sequential stream at/near frontier: BLOCK to pace
-                                 1x broadcast rate (core FUSE guarantee: the TV
-                                 can never overtake live or spin on repeats). */
-                            int sequential = (prev_Fend != (uint64_t)-1 && foff >= prev_Fend &&
-                                              foff - prev_Fend < 2 * 1024 * 1024);
-                            if (!sequential || start >= S_write + 1024 * 1024) {
-                                uint64_t safe_pos = snap188(ring_old + (F % (RINGSZ / 2)));
-                                if (safe_pos + cc > S_write) safe_pos = snap188(S_write > cc ? S_write - cc : 0);
-                                ring_copy(dst + done + fo, safe_pos, cc);
-                                fo += cc;
-                                continue;
-                            }
-                            while (start >= S_write && now_ms() < deadline_ms && running)
-                                wait_step();
-                            if (start >= S_write) { fill_null(dst + done + fo, cc); fo += cc; continue; }
-                            continue;
-                        }
+                        /* NEVER BLOCK: serve valid cyclic data from ring instantly.
+                           Blocking causes the TV's ConnectShare USB reader to stall,
+                           freezing video playback for seconds. Instead, serve old
+                           valid TS data; the TV will hit end-of-decodable-stream
+                           naturally and loop via "Repetir 1", triggering on_open
+                           which rebases to fresh live data. */
+                        uint64_t safe_pos = snap188(ring_old + (F % (RINGSZ / 2)));
+                        if (safe_pos + cc > S_write) safe_pos = snap188(S_write > cc ? S_write - cc : 0);
+                        ring_copy(dst + done + fo, safe_pos, cc);
+                        fo += cc;
+                        continue;
                     }
                     size_t avail = (size_t)(S_write - start);
                     if (avail > cc) avail = cc;

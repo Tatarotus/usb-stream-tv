@@ -291,10 +291,21 @@ def main():
     # 1. Notifica o servidor para chavear o canal upstream primeiro
     if channel_id:
         try:
+            # PIN lido de arquivo (nunca via argv: apareceria em `ps`).
+            # Criado no deploy com o mesmo valor do TV_PIN do servidor.
+            pin = ""
+            try:
+                with open("/data/local/tmp/pin.txt") as pf:
+                    pin = pf.read().strip()
+            except Exception:
+                pass
+            headers = {"Content-Type": "application/json"}
+            if pin:
+                headers["X-Auth-PIN"] = pin
             switch_req = urllib.request.Request(
                 f"{server_url}/api/switch",
                 data=f'{{"channel_id": "{channel_id}"}}'.encode("utf-8"),
-                headers={"Content-Type": "application/json"}
+                headers=headers
             )
             with urllib.request.urlopen(switch_req, timeout=3) as resp:
                 pass

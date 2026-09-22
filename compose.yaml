@@ -1,0 +1,20 @@
+services:
+  usb-stream-tv:
+    build: .
+    container_name: usb-stream-tv
+    restart: unless-stopped
+    environment:
+      - PORT=8080
+      - TV_PIN=1233
+      - STANDBY_TIMEOUT=90.0
+      - PYTHONUNBUFFERED=1
+      - CHANNELS_FILE=/app/channels_deploy.json
+      - MOVIES_DIR=/app/filmes
+    volumes:
+      - ./filmes:/app/filmes
+    networks:
+      - gateway_net
+
+networks:
+  gateway_net:
+    external: true

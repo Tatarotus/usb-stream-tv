@@ -18,10 +18,14 @@ from socketserver import ThreadingMixIn
 import json
 
 HOST = "0.0.0.0"
-PORT = 8080
+PORT = int(os.environ.get("PORT", 8080))
+AUTH_PIN = os.environ.get("TV_PIN", "1233")
+STANDBY_TIMEOUT = float(os.environ.get("STANDBY_TIMEOUT", 90.0))
 
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
-CHANNELS_FILE = os.path.join(CONFIG_DIR, "channels.json")
+DEPLOY_FILE = os.path.join(CONFIG_DIR, "channels_deploy.json")
+CHANNELS_FILE = os.environ.get("CHANNELS_FILE", DEPLOY_FILE if os.path.exists(DEPLOY_FILE) else os.path.join(CONFIG_DIR, "channels.json"))
+MOVIES_DIR = os.environ.get("MOVIES_DIR", os.path.join(CONFIG_DIR, "filmes"))
 EVENT_LOG = os.path.join(CONFIG_DIR, "server_events.log")
 
 def log_event(msg):
@@ -37,13 +41,14 @@ def log_event(msg):
 # Grupos inteligentes para a interface do controle remoto
 SMART_GROUPS = [
     {"id": "fav", "name": "Favoritos", "icon": "⭐", "filter": "favorites"},
-    {"id": "all", "name": "Todos (26)", "icon": "📺", "filter": "all"},
-    {"id": "abertos", "name": "TV Aberta", "icon": "📡", "categories": ["TV Aberta"]},
-    {"id": "filmes_series", "name": "Filmes & Séries", "icon": "🎬", "categories": ["Filmes & Séries"]},
-    {"id": "esportes", "name": "Esportes", "icon": "⚽", "categories": ["Esportes"]},
-    {"id": "noticias", "name": "Notícias", "icon": "📰", "categories": ["Notícias"]},
-    {"id": "publica", "name": "Pública & Educativa", "icon": "🏛️", "categories": ["TV Pública / Educativa"]},
-    {"id": "religiosos", "name": "Religiosos", "icon": "🙏", "categories": ["Religiosos"]}
+    {"id": "all", "name": "Todos", "icon": "📺", "filter": "all"},
+    {"id": "globos", "name": "Globos", "icon": "🌐", "categories": ["GLOBOS"]},
+    {"id": "abertos", "name": "TV Aberta", "icon": "📡", "categories": ["TV Aberta", "ABERTOS", "SBT", "RECORD", "BAND"]},
+    {"id": "noticias", "name": "Notícias", "icon": "📰", "categories": ["Notícias", "NEWS"]},
+    {"id": "esportes", "name": "Esportes", "icon": "⚽", "categories": ["Esportes", "SPORTV"]},
+    {"id": "hbo", "name": "HBO", "icon": "🎭", "categories": ["HBO"]},
+    {"id": "telecine", "name": "Telecine", "icon": "🍿", "categories": ["TELECINE"]},
+    {"id": "filmes_locais", "name": "Meus Filmes", "icon": "🎬", "categories": ["Meus Filmes"]}
 ]
 
 DEFAULT_CHANNELS = {
@@ -67,17 +72,59 @@ class ChannelManager:
 
     def reload(self):
         with self.lock:
-            if os.path.exists(CHANNELS_FILE):
+            target_file = CHANNELS_FILE
+            if not os.path.exists(target_file):
+                alt = os.path.join(CONFIG_DIR, "channels_deploy.json")
+                if os.path.exists(alt):
+                    target_file = alt
+
+            if os.path.exists(target_file):
                 try:
-                    mtime = os.path.getmtime(CHANNELS_FILE)
+                    mtime = os.path.getmtime(target_file)
                     if mtime != self.last_mtime:
-                        with open(CHANNELS_FILE, "r", encoding="utf-8") as f:
-                            self.channels = json.load(f)
+                        with open(target_file, "r", encoding="utf-8") as f:
+                            raw = json.load(f)
+
+                        parsed = {}
+                        if isinstance(raw, dict) and "canais" in raw:
+                            import re
+                            for c in raw.get("canais", []):
+                                cid = str(c.get("stream_id") or c.get("nome"))
+                                clean_id = re.sub(r"[^a-z0-9_-]", "", c.get("nome", cid).lower().replace(" ", "-"))
+                                parsed[clean_id] = {
+                                    "id": clean_id,
+                                    "name": c.get("nome"),
+                                    "quality": "1080p" if c.get("resolucao") in ("FHD", "1080p") else c.get("resolucao", "720p"),
+                                    "category": c.get("categoria_nome", "Geral"),
+                                    "url": c.get("url_m3u8") or c.get("url_ts"),
+                                    "logo": c.get("logo", "📺"),
+                                    "description": c.get("nome_original", "")
+                                }
+                        elif isinstance(raw, dict):
+                            parsed = raw
+
+                        # Escaneia pasta de filmes locais se existir
+                        if os.path.exists(MOVIES_DIR):
+                            for fname in sorted(os.listdir(MOVIES_DIR)):
+                                if fname.lower().endswith((".mkv", ".mp4", ".avi", ".ts")):
+                                    clean_mid = f"movie-{fname.lower().replace(' ', '-')}"
+                                    fpath = os.path.join(MOVIES_DIR, fname)
+                                    parsed[clean_mid] = {
+                                        "id": clean_mid,
+                                        "name": os.path.splitext(fname)[0],
+                                        "quality": "1080p",
+                                        "category": "Meus Filmes",
+                                        "url": fpath,
+                                        "logo": "🎬",
+                                        "description": f"Filme Pessoal ({fname})"
+                                    }
+
+                        self.channels = parsed
                         self.last_mtime = mtime
-                        print(f"[✓] Grade recarregada: {len(self.channels)} canais disponíveis.")
+                        print(f"[✓] Grade recarregada: {len(self.channels)} canais/filmes disponíveis.")
                         return True
                 except Exception as e:
-                    print(f"[!] Erro ao carregar channels.json: {e}")
+                    print(f"[!] Erro ao carregar canais: {e}")
             if not self.channels:
                 self.channels = DEFAULT_CHANNELS.copy()
             return False
@@ -292,12 +339,15 @@ class SeamlessRestamper:
 def build_ffmpeg_cmd(url):
     is_http = url.startswith("http://") or url.startswith("https://")
     cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "warning",
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
         "-re"
     ]
     if is_http:
+        ua = "Mozilla/5.0" if ("studut.shop" in url or "m3u8" in url) else "IPTVSmartersPro"
         cmd.extend([
-            "-user_agent", "IPTVSmartersPro",
+            "-user_agent", ua,
+            "-allowed_segment_extensions", "ALL",
+            "-extension_picky", "0",
             "-reconnect", "1", "-reconnect_streamed", "1",
             "-reconnect_delay_max", "3"
         ])
@@ -311,20 +361,21 @@ def build_ffmpeg_cmd(url):
         "-i", url,
         "-map", "0:v:0",
         "-map", "0:a:0?",
-        # Normalização visual: 720p 30fps fixo para o hardware da Samsung Plasma PL51F4000
-        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+        # Normalização visual: 1080p 30fps fixo para o hardware da Samsung Plasma PL51F4000
+        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
         "-r", "30",
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-tune", "zerolatency",
-        "-b:v", "2200k",
-        "-maxrate", "2600k",
-        "-bufsize", "1300k",
+        "-threads", "0",
+        "-b:v", "3500k",
+        "-maxrate", "4000k",
+        "-bufsize", "2000k",
         "-g", "30",
         "-keyint_min", "30",
         "-sc_threshold", "0",
         "-profile:v", "main",
-        "-level", "3.1",
+        "-level", "4.1",
         "-x264-params", "repeat-headers=1",
         # Normalização sonora: AC3 (Dolby Digital) a 48kHz (padrão nativo de TV Samsung)
         "-c:a", "ac3",
@@ -366,6 +417,8 @@ class StreamHub:
         self.proc = None
         self.running = True
         self.switching = False
+        self.in_standby = False
+        self.idle_since = None
         self.total_bytes = 0
         self.start_time = time.time()
         self.last_chunk_time = time.time()
@@ -399,12 +452,21 @@ class StreamHub:
         q = queue.Queue(maxsize=300)
         with self.lock:
             self.subscribers.add(q)
+            self.idle_since = None
+            if self.in_standby:
+                print("[*] Despertando do Standby Inteligente: TV conectada!")
+                log_event("STANDBY_WAKEUP (tv_connected)")
+                self.in_standby = False
+                self._start_initial()
             print(f"[+] Novo cliente conectado ao Hub. Total de ouvintes: {len(self.subscribers)}")
         return q
 
     def unsubscribe(self, q):
         with self.lock:
             self.subscribers.discard(q)
+            if len(self.subscribers) == 0 and not self.in_standby:
+                self.idle_since = time.time()
+                print(f"[*] Zero ouvintes. Standby agendado para {int(STANDBY_TIMEOUT)}s...")
             print(f"[-] Cliente desconectado do Hub. Total de ouvintes: {len(self.subscribers)}")
 
     def _broadcast(self, data):
@@ -425,6 +487,26 @@ class StreamHub:
 
     def _reader_loop(self):
         while self.running:
+            # Standby inteligente: 90s sem ouvintes encerra FFmpeg
+            if len(self.subscribers) == 0 and not self.in_standby:
+                if self.idle_since is None:
+                    self.idle_since = time.time()
+                elif time.time() - self.idle_since >= STANDBY_TIMEOUT:
+                    with self.lock:
+                        print(f"[*] Standby Inteligente: Sem ouvintes por {int(STANDBY_TIMEOUT)}s. Encerrando FFmpeg para poupar IPTV.")
+                        log_event("STANDBY_ENTER")
+                        self.in_standby = True
+                        if self.proc:
+                            try:
+                                self.proc.kill()
+                            except Exception:
+                                pass
+                            self.proc = None
+
+            if self.in_standby:
+                time.sleep(0.5)
+                continue
+
             p = self.proc
             if not p or p.poll() is not None:
                 time.sleep(0.05)
@@ -447,11 +529,11 @@ class StreamHub:
                         self._broadcast(processed)
             else:
                 # Processo terminou e não estamos trocando de canal
-                if p.poll() is not None and p == self.proc and not self.switching:
+                if p.poll() is not None and p == self.proc and not self.switching and not self.in_standby:
                     print(f"[!] Canal {self.current_channel_name} desconectou. Reconectando...")
                     log_event(f"FFMPEG_DIED rc={p.poll()} ch={self.current_channel_id} -> reconnect")
                     time.sleep(1)
-                    if not self.switching:
+                    if not self.switching and not self.in_standby:
                         self._start_initial()
                 else:
                     time.sleep(0.01)
@@ -671,6 +753,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             "active_channel_name": HUB.current_channel_name,
             "active_url": HUB.current_url,
             "listeners": len(HUB.subscribers),
+            "in_standby": HUB.in_standby,
             "total_mb": round(HUB.total_bytes / (1024 * 1024), 2),
             "uptime_secs": int(time.time() - HUB.start_time)
         }
@@ -707,6 +790,16 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception:
             params = urllib.parse.parse_qs(body)
             params = {k: v[0] for k, v in params.items()}
+
+        # Validação do PIN de Segurança (1233)
+        req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
+        if AUTH_PIN and req_pin != AUTH_PIN:
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": "PIN incorreto"}).encode("utf-8"))
+            return
 
         ch_id = params.get("channel_id")
         custom_url = params.get("url")
@@ -814,6 +907,11 @@ class RequestHandler(BaseHTTPRequestHandler):
             background: rgba(245, 158, 11, 0.15);
             color: var(--yellow);
             border-color: rgba(245, 158, 11, 0.3);
+        }}
+        .status-pill.standby {{
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--primary);
+            border-color: rgba(56, 189, 248, 0.4);
         }}
         /* Now Playing Banner */
         .now-card {{
@@ -1349,14 +1447,38 @@ class RequestHandler(BaseHTTPRequestHandler):
             renderGrid();
         }}
 
+        function getAuthPin() {{
+            let pin = localStorage.getItem('tv_pin');
+            if (!pin) {{
+                pin = prompt("Digite o PIN de acesso:");
+                if (pin) {{
+                    localStorage.setItem('tv_pin', pin.trim());
+                }}
+            }}
+            return pin || '';
+        }}
+
         async function switchChannel(id) {{
+            const pin = getAuthPin();
+            if (!pin) {{
+                showToast("PIN necessário para trocar canal.");
+                return;
+            }}
             showToast("Sintonizando canal na TV...");
             try {{
                 const res = await fetch('/api/switch', {{
                     method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ channel_id: id }})
+                    headers: {{ 
+                        'Content-Type': 'application/json',
+                        'X-Auth-PIN': pin
+                    }},
+                    body: JSON.stringify({{ channel_id: id, pin: pin }})
                 }});
+                if (res.status === 401) {{
+                    localStorage.removeItem('tv_pin');
+                    showToast("PIN incorreto. Tente novamente.");
+                    return;
+                }}
                 const data = await res.json();
                 if (data.success) {{
                     currentActiveId = id;
@@ -1372,15 +1494,25 @@ class RequestHandler(BaseHTTPRequestHandler):
         }}
 
         async function playCustom() {{
+            const pin = getAuthPin();
+            if (!pin) return;
             const url = document.getElementById('custom-url-input').value.trim();
             if (!url) return;
             showToast("Conectando stream manual...");
             try {{
                 const res = await fetch('/api/switch', {{
                     method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ url: url, name: "Stream Manual" }})
+                    headers: {{ 
+                        'Content-Type': 'application/json',
+                        'X-Auth-PIN': pin
+                    }},
+                    body: JSON.stringify({{ url: url, name: "Stream Manual", pin: pin }})
                 }});
+                if (res.status === 401) {{
+                    localStorage.removeItem('tv_pin');
+                    showToast("PIN incorreto.");
+                    return;
+                }}
                 const data = await res.json();
                 if (data.success) {{
                     showToast("Transmitindo stream manual!");
@@ -1400,9 +1532,12 @@ class RequestHandler(BaseHTTPRequestHandler):
 
                 const tvPill = document.getElementById('tv-status');
                 const tvText = document.getElementById('tv-status-text');
-                if (data.listeners > 0) {{
+                if (data.in_standby) {{
+                    tvPill.className = 'status-pill standby';
+                    tvText.innerText = 'Standby (Eco)';
+                }} else if (data.listeners > 0) {{
                     tvPill.className = 'status-pill';
-                    tvText.innerText = 'TV Conectada';
+                    tvText.innerText = 'TV Conectada (1080p)';
                 }} else {{
                     tvPill.className = 'status-pill waiting';
                     tvText.innerText = 'Aguardando TV';

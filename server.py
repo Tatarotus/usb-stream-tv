@@ -361,18 +361,24 @@ class SeamlessRestamper:
 
 def build_ffmpeg_cmd(url):
     is_http = url.startswith("http://") or url.startswith("https://")
+    url_lower = url.lower()
+    is_vod = any(x in url_lower for x in [
+        "fontedecanais", "/movie/", "/series/", "movies/", "series/",
+        ".mp4", ".mkv", "youtube.com", "googlevideo.com"
+    ])
+
     cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
-        "-re"
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning"
     ]
+
+    # Pacing -re APENAS para arquivos estáticos (VOD ou arquivo local).
+    # Em streams ao vivo (HLS/IPTV), -re NÃO deve ser usado pois atrasa a leitura
+    # dos chunks da rede e causa engasgos/desync com o buffer do broadcaster.
+    if not is_http or is_vod:
+        cmd.append("-re")
+
     if is_http:
         ua = "Mozilla/5.0" if ("studut.shop" in url or "m3u8" in url) else "IPTVSmartersPro"
-        url_lower = url.lower()
-        is_vod = any(x in url_lower for x in [
-            "fontedecanais", "/movie/", "/series/", "movies/", "series/",
-            ".mp4", ".mkv", "youtube.com", "googlevideo.com"
-        ])
-
         cmd.extend(["-user_agent", ua])
 
         if is_vod and RESIDENTIAL_HTTP_PROXY:
@@ -396,19 +402,19 @@ def build_ffmpeg_cmd(url):
 
 
     if STREAM_RESOLUTION == "1080p":
-        vf = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
-        b_v = "4500k"
-        maxrate = "5000k"
-        bufsize = "2500k"
+        vf = "scale=1920:1080:force_original_aspect_ratio=decrease:flags=bicubic,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+        b_v = "3800k"
+        maxrate = "4500k"
+        bufsize = "7600k"
     else:
-        vf = "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2"
+        vf = "scale=1280:720:force_original_aspect_ratio=decrease:flags=bicubic,pad=1280:720:(ow-iw)/2:(oh-ih)/2"
         b_v = "2200k"
         maxrate = "2600k"
-        bufsize = "1300k"
+        bufsize = "4400k"
 
     cmd.extend([
-        "-probesize", "500000",
-        "-analyzeduration", "1000000",
+        "-probesize", "1000000",
+        "-analyzeduration", "2000000",
         "-i", url,
         "-map", "0:v:0",
         "-map", "0:a:0?",
@@ -427,10 +433,10 @@ def build_ffmpeg_cmd(url):
         "-sc_threshold", "0",
         "-profile:v", "main",
         "-level", "4.1",
-        "-x264-params", "repeat-headers=1",
+        "-x264-params", "repeat-headers=1:aq-mode=2:aq-strength=1.0",
 
         # Normalização sonora: AC3 (Dolby Digital) a 48kHz (padrão nativo de TV Samsung)
-        "-af", "aresample=async=1:first_pts=0",
+        "-af", "aresample=async=1000:first_pts=0:min_hard_comp=0.100000",
         "-c:a", "ac3",
         "-b:a", "192k",
         "-ar", "48000",

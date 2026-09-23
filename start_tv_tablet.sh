@@ -2,10 +2,16 @@
 # start_tv.sh - USB Stream TV Bridge & Management Service on Tablet
 trap '' HUP
 
-killall -9 stream_fetcher fuse_direct chisel 2>/dev/null
+killall -9 stream_fetcher fuse_direct chisel tv_watchdog.sh 2>/dev/null
 sleep 1
 
+# Enforce default USB Mass Storage
+setprop persist.sys.usb.config mass_storage,adb
+setprop sys.usb.config mass_storage,adb
+echo 0 > /sys/class/backlight/panel/brightness 2>/dev/null
+
 # 1. Setup FUSE mountpoint & FIFO
+
 mkdir -p /data/local/tmp/vfat_mnt
 cp -f /system/etc/fat_template.bin /data/local/tmp/fat_template.bin
 chmod 644 /data/local/tmp/fat_template.bin
@@ -44,4 +50,8 @@ setprop service.adb.tcp.port 5555
 # 6. Start stream_fetcher
 /system/xbin/stream_fetcher /data/local/tmp/live_pipe tv.smre.run.place 80 > /data/local/tmp/stream_fetcher.log 2>&1 &
 
+# 7. Start USB Mass Storage & Process Watchdog
+/system/xbin/tv_watchdog.sh > /data/local/tmp/tv_watchdog.log 2>&1 &
+
 echo "[✓] USB Stream TV stack started!"
+

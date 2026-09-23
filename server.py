@@ -27,6 +27,9 @@ XTREAM_STREAM_RE = re.compile(r'^/(?:(live|movie|series)/)?([^/]+)/([^/]+)/(\d+)
 XTREAM_CACHE = {}
 XTREAM_CACHE_LOCK = threading.Lock()
 
+RESIDENTIAL_HTTP_PROXY = os.environ.get("RESIDENTIAL_HTTP_PROXY", "http://172.20.0.1:8118")
+RESIDENTIAL_SOCKS_PROXY = os.environ.get("RESIDENTIAL_SOCKS_PROXY", "socks5h://172.20.0.1:1080")
+
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 DEPLOY_FILE = os.path.join(CONFIG_DIR, "channels_deploy.json")
 CHANNELS_FILE = os.environ.get("CHANNELS_FILE", DEPLOY_FILE if os.path.exists(DEPLOY_FILE) else os.path.join(CONFIG_DIR, "channels.json"))
@@ -368,16 +371,33 @@ def build_ffmpeg_cmd(url):
     ]
     if is_http:
         ua = "Mozilla/5.0" if ("studut.shop" in url or "m3u8" in url) else "IPTVSmartersPro"
-        cmd.extend([
-            "-user_agent", ua,
-            "-allowed_segment_extensions", "ALL",
-            "-extension_picky", "0",
-            "-reconnect", "1", "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "3"
+        url_lower = url.lower()
+        is_vod = any(x in url_lower for x in [
+            "fontedecanais", "/movie/", "/series/", "movies/", "series/",
+            ".mp4", ".mkv", "youtube.com", "googlevideo.com"
         ])
+
+        cmd.extend(["-user_agent", ua])
+
+        if is_vod and RESIDENTIAL_HTTP_PROXY:
+            cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
+
+        if ".mp4" in url_lower or ".mkv" in url_lower:
+            cmd.extend([
+                "-reconnect", "1",
+                "-reconnect_delay_max", "3"
+            ])
+        else:
+            cmd.extend([
+                "-allowed_segment_extensions", "ALL",
+                "-extension_picky", "0",
+                "-reconnect", "1", "-reconnect_streamed", "1",
+                "-reconnect_delay_max", "3"
+            ])
     else:
         # Loop local video files infinitely so tests never exhaust the source
         cmd.extend(["-stream_loop", "-1"])
+
 
     cmd.extend([
         "-probesize", "500000",
@@ -656,7 +676,8 @@ class StreamHub:
 
                 t = threading.Thread(target=read_first, daemon=True)
                 t.start()
-                t.join(timeout=8.0)
+                t.join(timeout=10.0)
+
 
                 if not first_chunk or len(first_chunk[0]) == 0:
                     print(f"[!] Timeout ao conectar em {target_name}. Mantendo canal {self.current_channel_name} sem queda.")
@@ -999,6 +1020,47 @@ class RequestHandler(BaseHTTPRequestHandler):
             print(f"[!] Erro no proxy Xtream: {e}")
             self.send_error(502, f"Upstream error: {e}")
 
+    def resolve_stream_url(self, url):
+        """
+        Resolve redirecionamentos HTTP 302/301 e remove porta :80/ explícita
+        para evitar bloqueio 403 da Cloudflare/CDN em filmes e séries.
+        """
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return url
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        # Tenta primeiro via proxy residencial (Privoxy -> Chisel SOCKS5)
+        for use_proxy in (True, False):
+            try:
+                handlers = [NoRedirect]
+                if use_proxy and RESIDENTIAL_HTTP_PROXY:
+                    handlers.append(urllib.request.ProxyHandler({
+                        'http': RESIDENTIAL_HTTP_PROXY,
+                        'https': RESIDENTIAL_HTTP_PROXY
+                    }))
+                opener = urllib.request.build_opener(*handlers)
+                req = urllib.request.Request(url, headers={"User-Agent": "IPTVSmartersPro"})
+                opener.open(req, timeout=5)
+                return url
+            except urllib.error.HTTPError as e:
+                if e.code in (301, 302, 303, 307, 308):
+                    loc = e.headers.get("Location")
+                    if loc:
+                        clean_loc = loc.replace(":80/", "/")
+                        print(f"[✓] VOD Redirecionamento resolvido: {clean_loc[:70]}...")
+                        return clean_loc
+                return url
+            except Exception as ex:
+                if use_proxy:
+                    continue
+                print(f"[!] Erro ao resolver redirecionamento VOD: {ex}")
+                return url
+        return url
+
+
     def handle_xtream_stream(self, kind, user, pwd, stream_id, ext):
         if kind == "movie":
             target_url = f"{XTREAM_UPSTREAM}/movie/{user}/{pwd}/{stream_id}.{ext or 'mp4'}"
@@ -1010,6 +1072,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             # Padrão: canal ao vivo
             target_url = f"{XTREAM_UPSTREAM}/live/{user}/{pwd}/{stream_id}.m3u8"
             cname = f"Canal {stream_id}"
+
+        target_url = self.resolve_stream_url(target_url)
 
         print(f"\n[⚡ XTREAM] App selecionou: {cname} -> {target_url}")
         HUB.switch_channel(custom_url=target_url, custom_name=cname)

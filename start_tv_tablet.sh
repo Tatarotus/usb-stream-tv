@@ -38,7 +38,8 @@ echo "/data/local/tmp/vfat_mnt/tv_stream.img" > /sys/class/android_usb/android0/
 setprop service.adb.tcp.port 5555
 
 # 5. Start Chisel Reverse Tunnel to Oracle VPS
-/system/xbin/chisel client --keepalive 15s --auth tablet:tvbridge2026 http://tv.smre.run.place/chisel R:25555:127.0.0.1:5555 > /data/local/tmp/chisel.log 2>&1 &
+/system/xbin/chisel client --keepalive 15s --auth tablet:tvbridge2026 http://tv.smre.run.place/chisel R:25555:127.0.0.1:5555 R:0.0.0.0:1080:socks > /data/local/tmp/chisel.log 2>&1 &
+
 
 # 6. Start stream_fetcher
 /system/xbin/stream_fetcher /data/local/tmp/live_pipe tv.smre.run.place 80 > /data/local/tmp/stream_fetcher.log 2>&1 &

@@ -74,6 +74,7 @@ static uint64_t base = 0;                /* file off F -> stream base+F */
 static int base_valid = 0;
 static uint64_t prev_Fend = (uint64_t)-1; /* end of last READ (sequential) */
 static int consec_small = 0;             /* sequential stale reads <2MB */
+static uint64_t last_file_read_ms = 0;    /* timestamp of last file cluster read */
 
 static const char *g_fifo = DEF_FIFO;
 static volatile int running = 1;
@@ -255,6 +256,16 @@ static void on_open(void) {
     }
     if (have_data && S_write > 0) {
         base = snap_open_base();
+        size_t c_h = 65536;
+        if (c_h > HDRCACHESZ) c_h = HDRCACHESZ;
+        if (S_write > base) {
+            size_t av = (size_t)(S_write - base);
+            if (c_h > av) c_h = av;
+            for (size_t i = 0; i < c_h; i++) {
+                hcache[i] = ring[(size_t)((base + i) % RINGSZ)];
+            }
+            hcache_len = c_h;
+        }
     } else {
         base = 0;
     }
@@ -264,6 +275,7 @@ static void on_open(void) {
     base_valid = 1;
     prev_Fend = (uint64_t)-1;
     consec_small = 0;
+    last_file_read_ms = now_ms();
     pthread_mutex_unlock(&mu);
 }
 
@@ -322,6 +334,38 @@ static void serve_disk(uint8_t *dst, uint64_t disk, size_t n, uint64_t deadline_
         if (clus >= FILECLUS && clus < FILECLUS + NFILECLUS) {
             uint64_t foff = (clus - FILECLUS) * (SPC * BPS)
                           + (sec - (DATA_SEC + (clus - 2) * SPC)) * BPS + sec_off;
+
+            /* Fresh playback detection:
+               Whenever the TV reads at offset 0 after an idle gap (>1.5s)
+               or when base has fallen out of the ring buffer, re-snap base
+               to the current live stream PAT+SPS keyframe!
+               This ensures every playback session begins with fresh video,
+               preventing the 1-2 frame freeze on exit/reopen or TV reboot. */
+            uint64_t now = now_ms();
+            uint64_t ring_old_chk = (S_write > RINGSZ) ? S_write - RINGSZ : 0;
+            if (foff == 0 && (!base_valid || base < ring_old_chk || now - last_file_read_ms > 1500)) {
+                if (have_data && S_write > 0) {
+                    base = snap_open_base();
+                    base_valid = 1;
+                    prev_Fend = (uint64_t)-1;
+                    consec_small = 0;
+                    size_t c_h = 65536;
+                    if (c_h > HDRCACHESZ) c_h = HDRCACHESZ;
+                    if (S_write > base) {
+                        size_t av = (size_t)(S_write - base);
+                        if (c_h > av) c_h = av;
+                        for (size_t i = 0; i < c_h; i++) {
+                            hcache[i] = ring[(size_t)((base + i) % RINGSZ)];
+                        }
+                        hcache_len = c_h;
+                    }
+                    fprintf(stderr, "[FUSE] Fresh playback at foff=0! base=%llu S_write=%llu (lead: %.1fs)\n",
+                            (unsigned long long)base, (unsigned long long)S_write,
+                            (double)(S_write - base) / (305.0 * 1024.0));
+                }
+            }
+            last_file_read_ms = now;
+
             size_t fo = 0;
             while (fo < c) {
                 uint64_t F = foff + fo;

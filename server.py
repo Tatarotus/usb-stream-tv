@@ -542,8 +542,20 @@ class StreamHub:
                 continue
 
             p = self.proc
-            if not p or p.poll() is not None:
+            if not p:
                 time.sleep(0.05)
+                continue
+
+            if p.poll() is not None:
+                if p == self.proc and not self.switching and not self.in_standby:
+                    rc = p.poll()
+                    print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
+                    log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
+                    time.sleep(1)
+                    if not self.switching and not self.in_standby:
+                        self._start_initial()
+                else:
+                    time.sleep(0.05)
                 continue
 
             try:
@@ -564,8 +576,9 @@ class StreamHub:
             else:
                 # Processo terminou e não estamos trocando de canal
                 if p.poll() is not None and p == self.proc and not self.switching and not self.in_standby:
-                    print(f"[!] Canal {self.current_channel_name} desconectou. Reconectando...")
-                    log_event(f"FFMPEG_DIED rc={p.poll()} ch={self.current_channel_id} -> reconnect")
+                    rc = p.poll()
+                    print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
+                    log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
                     time.sleep(1)
                     if not self.switching and not self.in_standby:
                         self._start_initial()
@@ -625,7 +638,7 @@ class StreamHub:
                     print(f"[!] Erro ao iniciar processo para {target_name}: {e}")
                     return
 
-                # Aguarda os primeiros bytes válidos do novo canal (timeout 5s)
+                # Aguarda os primeiros bytes válidos do novo canal (timeout 8s)
                 # O canal anterior CONTINUA TRANSMITINDO durante este tempo!
                 first_chunk = []
                 def read_first():
@@ -638,7 +651,7 @@ class StreamHub:
 
                 t = threading.Thread(target=read_first, daemon=True)
                 t.start()
-                t.join(timeout=5.0)
+                t.join(timeout=8.0)
 
                 if not first_chunk or len(first_chunk[0]) == 0:
                     print(f"[!] Timeout ao conectar em {target_name}. Mantendo canal {self.current_channel_name} sem queda.")

@@ -12,6 +12,8 @@ services:
       - MOVIES_DIR=/app/filmes
       - RESIDENTIAL_HTTP_PROXY=http://172.20.0.1:8118
       - RESIDENTIAL_SOCKS_PROXY=socks5h://172.20.0.1:1080
+      - STREAM_RESOLUTION=1080p
+
 
     volumes:
       - ./filmes:/app/filmes

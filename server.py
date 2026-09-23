@@ -29,6 +29,8 @@ XTREAM_CACHE_LOCK = threading.Lock()
 
 RESIDENTIAL_HTTP_PROXY = os.environ.get("RESIDENTIAL_HTTP_PROXY", "http://172.20.0.1:8118")
 RESIDENTIAL_SOCKS_PROXY = os.environ.get("RESIDENTIAL_SOCKS_PROXY", "socks5h://172.20.0.1:1080")
+STREAM_RESOLUTION = os.environ.get("STREAM_RESOLUTION", "1080p").lower()
+
 
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 DEPLOY_FILE = os.path.join(CONFIG_DIR, "channels_deploy.json")
@@ -399,28 +401,40 @@ def build_ffmpeg_cmd(url):
         cmd.extend(["-stream_loop", "-1"])
 
 
+    if STREAM_RESOLUTION == "1080p":
+        vf = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+        b_v = "4500k"
+        maxrate = "5000k"
+        bufsize = "2500k"
+    else:
+        vf = "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2"
+        b_v = "2200k"
+        maxrate = "2600k"
+        bufsize = "1300k"
+
     cmd.extend([
         "-probesize", "500000",
         "-analyzeduration", "1000000",
         "-i", url,
         "-map", "0:v:0",
         "-map", "0:a:0?",
-        # Normalização visual: 720p 30fps fixo para o hardware da Samsung Plasma PL51F4000
-        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+        # Normalização visual: 1080p ou 720p 30fps para Samsung Plasma PL51F4000
+        "-vf", vf,
         "-r", "30",
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-tune", "zerolatency",
         "-threads", "0",
-        "-b:v", "2200k",
-        "-maxrate", "2600k",
-        "-bufsize", "1300k",
+        "-b:v", b_v,
+        "-maxrate", maxrate,
+        "-bufsize", bufsize,
         "-g", "30",
         "-keyint_min", "30",
         "-sc_threshold", "0",
         "-profile:v", "main",
         "-level", "4.1",
         "-x264-params", "repeat-headers=1",
+
         # Normalização sonora: AC3 (Dolby Digital) a 48kHz (padrão nativo de TV Samsung)
         "-c:a", "ac3",
         "-b:a", "192k",

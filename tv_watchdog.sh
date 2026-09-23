@@ -3,6 +3,7 @@
 trap '' HUP
 
 IMG="/data/local/tmp/vfat_mnt/tv_stream.img"
+CMD_TICK=0
 
 while true; do
     sleep 2
@@ -54,10 +55,14 @@ while true; do
         /system/xbin/chisel client --keepalive 15s --auth tablet:tvbridge2026 http://tv.smre.run.place/chisel R:25555:127.0.0.1:5555 R:0.0.0.0:1080:socks >> /data/local/tmp/chisel.log 2>&1 &
     fi
 
-    # 6. Fallback HTTP remote management for tablet (bypasses ADB)
-    CMD=$(busybox wget -q -O - "http://tv.smre.run.place/api/tablet_cmd" 2>/dev/null)
-    if [ -n "$CMD" ] && [ "$CMD" != "none" ]; then
-        RES=$(sh -c "$CMD" 2>&1)
-        busybox wget -q -O /dev/null --post-data="$RES" "http://tv.smre.run.place/api/tablet_cmd_res" 2>/dev/null
+    # 6. Fallback HTTP remote management for tablet (runs every 30s as safety net)
+    CMD_TICK=$((CMD_TICK + 1))
+    if [ "$CMD_TICK" -ge 15 ]; then
+        CMD_TICK=0
+        CMD=$(busybox wget -q -O - "http://tv.smre.run.place/api/tablet_cmd" 2>/dev/null)
+        if [ -n "$CMD" ] && [ "$CMD" != "none" ]; then
+            RES=$(sh -c "$CMD" 2>&1)
+            busybox wget -q -O /dev/null --post-data="$RES" "http://tv.smre.run.place/api/tablet_cmd_res" 2>/dev/null
+        fi
     fi
 done

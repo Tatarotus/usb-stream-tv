@@ -19,7 +19,7 @@ Transformamos um smartphone ou tablet Android antigo com root em um **Pendrive V
 
 ---
 
-## 🚀 2. Os 8 Grandes Breakthroughs Técnicos
+## 🚀 2. Os 10 Grandes Breakthroughs Técnicos
 
 Durante o desenvolvimento deste projeto, superamos diversas barreiras de hardware e software que tornaram o projeto viável:
 
@@ -56,7 +56,23 @@ Durante o desenvolvimento deste projeto, superamos diversas barreiras de hardwar
 ### 8. Amortecedor de Pacing (`LEADBACK = 12 MB`)
 * **O Funcionamento:** A TV lê com uma margem de segurança de **12 MB (~40 segundos)** atrás da escrita ao vivo no anel de RAM de 32 MB. Essa folga atua como um amortecedor hidráulico perfeito, absorvendo oscilações de Wi-Fi, reconexões de rede ou latências de CDN sem que a TV sofra travamentos.
 
+### 9. Pipeline de Transcodificação 1080p Fine-Tuned
+* **O Problema:** Canais IPTV em 720p alimentam diretamente a TV com resolução nativa do sinal, mas canais ao vivo que broadcast em 1080i/1080p precisam de configuração cuidadosa de VBV e GOP para não gerar artefatos em TVs com buffer de RAM limitado.
+* **A Solução:** O `server.py` detecta a variável `STREAM_RESOLUTION=1080p` e ajusta automaticamente o pipeline FFmpeg para 1920×1080@30fps com parâmetros empiricamente validados:
+  * **VBV ampliado**: `b:v=3800k / maxrate=4500k / bufsize=7600k` (janela de 2 segundos) — evita picos de quantizador em I-frames que causavam macro-blocos visíveis.
+  * **Quantização adaptativa**: `aq-mode=2:aq-strength=1.0` — distribui bits para áreas escuras, crucial para painéis de plasma com contraste elevado.
+  * **Escalonamento bicúbico**: `scale=1920:1080:flags=bicubic` — bordas mais suaves sem *ringing* no upscale.
+  * **Correção de PTS de áudio**: `-af "aresample=async=1000:first_pts=0"` — âncora o áudio no PTS=0 e corrige até 1000 amostras/s de deriva.
+
+### 10. Correção da Dessincronização A/V no `SeamlessRestamper`
+* **O Problema:** Canais HLS como a TV Morena (Rede Globo) entregam o áudio **7,4 segundos antes do vídeo** na playlist. O `SeamlessRestamper` original usava um único relógio compartilhado entre áudio e vídeo. A diferença de PTS entre streams era interpretada como um salto brusco para trás, gerando mais de 11.760 eventos `PTS_JUMP -7,4s` por hora e causando dessincronização labial permanente.
+* **A Solução:** Dois domínios de relógio independentes:
+  * **Vídeo** → relógio mestre (`last_out_video_pts`) — única fonte de verdade para detecção de descontinuidade e `PTS_REBASE`.
+  * **Áudio** → seguidor (`last_out_audio_pts`) — nunca dispara rebase; avança monotonicamente com +0,032s por quadro AC3.
+* **Resultado verificado**: `mpv` exibe `A-V: 0.000` de forma consistente; `ffprobe` confirma áudio monotônico a `+32ms` por pacote.
+
 ---
+
 
 ## 🏗️ 3. Arquitetura do Sistema
 
@@ -243,6 +259,8 @@ Para mudar de canal:
 | **Duração absurda no player (ex.: 26h)** | Salto de timestamp da fonte ao vivo. | O `SeamlessRestamper` registra em `server_events.log` e suaviza; aguarde uma volta do buffer (~3 min). |
 | **Gravador em loop de reconexão** | URL do túnel expirou (muda a cada reinício do cloudflared) ou `adb reverse` caiu. | Atualize `/data/local/tmp/server_url.txt` com a URL atual de `tunnel_url.txt`; no PC, confira `systemctl --user status usb-tv-reverse`. |
 | **PC não monta / adb sumiu após mexer no USB** | Todo `echo none > .../UDC` derruba o transporte ADB até re-enumerar. | Aguarde ~10 s e `adb wait-for-device`. Nunca assuma ADB vivo logo após reconfigurar o gadget. |
+| **Áudio fora de sincronia (labial/desync) no canal** | HLS source entrega áudio X segundos antes do vídeo (ex.: TV Morena +7.4s). Antigo `SeamlessRestamper` oscilava ao interpretar o offset como descontinuidade. | Já corrigido (commit `756d2a9`): `SeamlessRestamper` usa relógios independentes por stream (vídeo=mestre, áudio=seguidor). Verificar: `grep PTS_JUMP /opt/containers/apps/usb-stream-tv/server_events.log` — deve estar vazio. |
+| **Tablet ADB 25555 offline / chisel tunnel caído** | `sys.usb.config` sem `,adb` mata o `adbd`. | Reconectar tablet via USB e rodar `./fix_tablet_adb.sh`. Ou aguardar próximo poll do watchdog (30s) pelo canal HTTP `/api/tablet_exec`. |
 
 > **⚠️ Aviso de segurança:** este repositório é público e o `channels.json` contém URLs de providers IPTV (possivelmente com credenciais). Antes de publicar um fork, remova credenciais e use variáveis de ambiente ou arquivo local ignorado pelo git.
 

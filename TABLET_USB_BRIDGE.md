@@ -315,3 +315,70 @@ Because the tablet identified itself as an MTP media player, the Samsung Plasma 
    The Samsung Plasma TV USB port provides 500mA max. The tablet's screen stay-awake was drawing excessive power, dropping battery voltage to `3603 mV`.
    The watchdog keeps panel brightness at `0` (`/sys/class/backlight/panel/brightness`), allowing the tablet to steadily charge at `3850 mV` from the TV USB port.
 
+
+---
+
+## 13. ADB Hardening — Persistent TCP Port 5555
+
+### Root Cause of ADB Loss
+A critical failure mode was discovered: when `sys.usb.config` was set to `mass_storage` (without `,adb`), Android `init` immediately executed `stop adbd`, closing TCP port 5555. This silently killed the Chisel reverse tunnel (`127.0.0.1:25555`) and made the tablet completely unreachable over WiFi.
+
+### The Fix
+1. **Enforce composite gadget**: Always use `mass_storage,adb` (never `mass_storage` alone). Samsung ConnectShare accepts composite USB gadgets without issue.
+2. **Lock persist property**: `setprop persist.adb.tcp.port 5555` — ensures `adbd` always binds TCP 5555 on restart.
+3. **Watchdog self-healing ADB**: `tv_watchdog.sh` checks every 2s:
+   ```bash
+   if ! netstat -tlpn 2>/dev/null | grep -q ":5555 "; then
+       setprop service.adb.tcp.port 5555
+       stop adbd; start adbd
+   fi
+   ```
+4. **One-shot fix script**: `fix_tablet_adb.sh` (run from dev machine when tablet is connected via USB) — detects TWRP or normal boot, pushes updated scripts, locks persist props, verifies tunnel at `127.0.0.1:25555`.
+
+### Verified State
+```
+persist.adb.tcp.port=5555
+persist.sys.usb.config=mass_storage,adb
+netstat: 0.0.0.0:5555 LISTEN
+127.0.0.1:25555 device   ← confirmed via chisel tunnel
+```
+
+---
+
+## 14. HTTP Fallback Remote Command Channel
+
+### Problem
+The Chisel tunnel and ADB over TCP (`127.0.0.1:25555`) are the primary remote management path. If ADB ever drops (see Section 13), there was previously no secondary path to reach the tablet for diagnostics or recovery.
+
+### Solution: Polling HTTP Channel
+The tablet's `tv_watchdog.sh` polls the VPS server every **30 seconds**:
+```bash
+CMD=$(busybox wget -qO- http://tv.smre.run.place/api/tablet_cmd)
+if [ "$CMD" != "none" ]; then
+    RESULT=$(eval "$CMD" 2>&1)
+    busybox wget -qO- --post-data="result=$RESULT" http://tv.smre.run.place/api/tablet_cmd_res
+fi
+```
+
+### Server API Endpoints (added to `server.py`)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/tablet_cmd` | GET | Returns pending command for tablet (or `"none"`) |
+| `/api/tablet_cmd_res` | POST | Tablet posts command result back (body: `result=...`) |
+| `/api/tablet_exec` | POST | Dev machine sends command; waits up to 10s for tablet response |
+
+### Usage from Dev Machine
+```bash
+# Send command to tablet (waits up to 10s for response from watchdog poll)
+curl -s -X POST -H "Content-Type: application/json" -H "X-Auth-PIN: 1233" \
+  -d '{"cmd": "uptime"}' https://tv.smre.run.place/api/tablet_exec
+
+# Expected response (up to 10s latency due to 30s polling interval):
+# {"output": "up 2 days, 3:14, load average: 0.00 0.00 0.00"}
+```
+
+> **Latency**: Up to 30 seconds (poll interval). This is an emergency fallback, not a real-time shell.
+
+---
+
+> **Last updated**: 2026-09-23 by Antigravity agent. Sections 13 & 14 document ADB hardening and HTTP fallback channel added in this session.

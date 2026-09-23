@@ -530,6 +530,39 @@ TV USB 2.0 ports deliver only 450–500mA. Running screen backlight + Wi-Fi + CP
 - `tv_watchdog.sh` actively verifies `netstat -tlpn | grep -q ":5555 "` and restarts `adbd` if it ever drops.
 - A secondary HTTP fallback channel (`busybox wget http://tv.smre.run.place/api/tablet_cmd`) polls every 30s to allow remote emergency shell access even if ADB is down.
 
+### 15. SeamlessRestamper Must Track Audio and Video Clocks Independently
+- **Root cause discovered**: TV Morena (Rede Globo) HLS source delivers audio starting **7.4 seconds before video**, creating a PTS differential between streams at startup.
+- The original restamper used a single shared `last_out_pts` for both audio and video. When the audio stream's input PTS jumped relative to the video (as expected in multi-stream HLS), the restamper misidentified it as a large backward discontinuity and applied `PTS_REBASE` — which then oscillated continuously, generating 11,760+ `PTS_JUMP -7.4s` events per hour and causing permanent A/V desync.
+- **Fix**: Two independent clock domains:
+  - Video → `last_out_video_pts`, `prev_in_video_pts` — the **master clock**; only video triggers PTS rebase logic.
+  - Audio → `last_out_audio_pts` — follows a fixed offset from video master; **never triggers rebase**.
+- Verify with: `ffprobe -v quiet -show_packets -select_streams a:0 -of json <stream_url>` — each audio packet must advance monotonically (`+0.032000s` for AC3 at 48kHz).
+
+### 16. Do Not Use `-re` Flag for Live HLS Sources
+- The `-re` flag ("read at native frame rate") is intended for locally-stored VOD files and artificially limits FFmpeg's input read speed to real-time.
+- For live HLS/m3u8 sources, `-re` fights the CDN's natural pacing and causes frame accumulation during jitter, manifesting as stuttering or large buffer underruns when the CDN delivers bursts.
+- **Rule**: `-re` is only added when `not is_http or is_vod` (i.e., for local VOD files or non-HTTP sources). Live HLS channels run without `-re`.
+- The `build_ffmpeg_cmd()` function in `server.py` already enforces this correctly.
+
+### 17. FFmpeg Encoding Parameters Fine-Tuned for Samsung Plasma PL51F4000
+The following parameters were empirically validated to produce the smoothest output on the Samsung PL51F4000:
+```
+Probe:         -probesize 1000000 -analyzeduration 2000000
+Video codec:   libx264 -preset fast -profile:v baseline -level 4.0
+Bitrate/VBV:   -b:v 3800k -maxrate 4500k -bufsize 7600k   (2s VBV window)
+GOP:           -g 60 -keyint_min 30 -sc_threshold 0
+AQ:            -x264opts aq-mode=2:aq-strength=1.0  (variance-based, good for dark scenes)
+Scale:         scale=1920:1080:force_original_aspect_ratio=decrease:flags=bicubic
+Audio codec:   -c:a ac3 -b:a 192k -ar 48000 -ac 2
+Audio PTS fix: -af "aresample=async=1000:first_pts=0:min_hard_comp=0.100000"
+Output:        -f mpegts -muxdelay 0 -muxpreload 0
+PIDs:          -streamid 0:256 -streamid 1:257 -map 0:v:0 -map 0:a:0
+```
+- `bufsize=7600k` (2× maxrate) prevents quantizer spikes at scene changes; previously `bufsize=2000k` caused macro-block artifacts at I-frames.
+- `aq-mode=2` (variance-adaptive quantization) distributes bits to darker areas of the frame — important for plasma panels that have high contrast in dark scenes.
+- `bicubic` scaler produces smoother upscaled edges vs. bilinear (default), avoiding ringing artifacts at low-detail areas.
+- `aresample=async=1000:first_pts=0` corrects any residual A/V offset on output mux side, starting audio at PTS=0 and allowing up to 1000 samples/s compensation rate.
+
 ---
 
 
@@ -588,9 +621,13 @@ curl -s https://tv.smre.run.place/api/status
 curl -s -X POST -H "Content-Type: application/json" -H "X-Auth-PIN: 1233" \
   -d '{"channel_id": "globo-morena-dourados"}' https://tv.smre.run.place/api/switch
 
-# Execute command on phone
+# Execute command on phone (Mi A2)
 curl -s -X POST -H "Content-Type: application/json" -H "X-Auth-PIN: 1233" \
   -d '{"cmd": "uptime"}' https://tv.smre.run.place/api/exec
+
+# Execute command on tablet (SM-T110, via HTTP fallback — 10s timeout)
+curl -s -X POST -H "Content-Type: application/json" -H "X-Auth-PIN: 1233" \
+  -d '{"cmd": "uptime"}' https://tv.smre.run.place/api/tablet_exec
 
 # Download live stream
 curl -s https://tv.smre.run.place/live.ts | mpv -
@@ -599,8 +636,8 @@ curl -s https://tv.smre.run.place/live.ts | mpv -
 ### GitHub
 ```
 Repository: Tatarotus/usb-stream-tv
-Branch: main
-Latest commit: 652923b
+Branch: experimental
+Latest commit: bb21c78
 ```
 
 ### IPTV Account
@@ -618,4 +655,4 @@ PIN: 1233
 
 ---
 
-> **Last updated**: 2026-09-23 by Antigravity agent, after empirically verifying smooth playback including exit/reopen, cable disconnect/reconnect, and channel switching on Samsung PL51F4000.
+> **Last updated**: 2026-09-23 by Antigravity agent, after empirically verifying smooth playback including exit/reopen, cable disconnect/reconnect, and channel switching on Samsung PL51F4000. Session additions: 1080p transcoding pipeline (STREAM_RESOLUTION env var), A/V desync root-cause fix (independent audio/video clock domains in SeamlessRestamper), ADB hardening (persist.adb.tcp.port 5555 + tv_watchdog.sh self-healing), HTTP fallback tablet command channel (/api/tablet_exec), and FFmpeg fine-tuning (VBV 7600k, aq-mode=2, bicubic, aresample async correction).

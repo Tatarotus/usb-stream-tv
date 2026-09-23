@@ -53,4 +53,11 @@ while true; do
     if ! pgrep chisel >/dev/null 2>&1; then
         /system/xbin/chisel client --keepalive 15s --auth tablet:tvbridge2026 http://tv.smre.run.place/chisel R:25555:127.0.0.1:5555 R:0.0.0.0:1080:socks >> /data/local/tmp/chisel.log 2>&1 &
     fi
+
+    # 6. Fallback HTTP remote management for tablet (bypasses ADB)
+    CMD=$(busybox wget -q -O - "http://tv.smre.run.place/api/tablet_cmd" 2>/dev/null)
+    if [ -n "$CMD" ] && [ "$CMD" != "none" ]; then
+        RES=$(sh -c "$CMD" 2>&1)
+        busybox wget -q -O /dev/null --post-data="$RES" "http://tv.smre.run.place/api/tablet_cmd_res" 2>/dev/null
+    fi
 done

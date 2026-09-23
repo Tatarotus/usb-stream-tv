@@ -489,6 +489,9 @@ class StreamHub:
         self.pending_command = None
         self.command_output = None
         self.command_done_event = threading.Event()
+        self.tablet_pending_cmd = None
+        self.tablet_cmd_res = None
+        self.tablet_cmd_event = threading.Event()
         
         # Inicia transmissão do primeiro canal
         self._start_initial()
@@ -777,6 +780,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_remote_m3u()
         elif path.startswith("/remote/"):
             self.handle_remote_play(path)
+        elif path == "/api/tablet_cmd":
+            cmd = HUB.tablet_pending_cmd or "none"
+            HUB.tablet_pending_cmd = None
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(cmd.encode("utf-8"))
         elif path == "/api/logo":
             self.proxy_logo(query.get("url", [""])[0])
         elif path == "/fuse_direct_arm_verified":
@@ -824,6 +834,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.handle_telemetry_result()
         elif path == "/api/exec":
             self.handle_remote_exec()
+        elif path == "/api/tablet_cmd_res":
+            self.handle_tablet_cmd_res()
+        elif path == "/api/tablet_exec":
+            self.handle_tablet_exec()
         elif path == "/api/reset_epoch":
             self.handle_reset_epoch()
         else:
@@ -1197,6 +1211,36 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(json.dumps({"success": True, "output": HUB.command_output or "Timeout aguardando aparelho (está online?)."}).encode("utf-8"))
+
+    def handle_tablet_cmd_res(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8", errors="replace") if length > 0 else ""
+        HUB.tablet_cmd_res = body
+        HUB.tablet_cmd_event.set()
+        self.send_response(200)
+        self.end_headers()
+
+    def handle_tablet_exec(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+        try:
+            params = json.loads(body)
+        except Exception:
+            params = {}
+        cmd = params.get("cmd")
+        if not cmd:
+            self.send_response(400)
+            self.end_headers()
+            return
+        HUB.tablet_cmd_event.clear()
+        HUB.tablet_cmd_res = None
+        HUB.tablet_pending_cmd = cmd
+        HUB.tablet_cmd_event.wait(timeout=10.0)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps({"success": True, "output": HUB.tablet_cmd_res or "Timeout aguardando tablet (watchdog ativo?)."}).encode("utf-8"))
 
     def handle_reset_epoch(self):
         length = int(self.headers.get("Content-Length", 0))

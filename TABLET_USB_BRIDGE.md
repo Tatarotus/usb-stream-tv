@@ -208,16 +208,19 @@ daemonsu starts (SuperSU daemon, via /system/etc/install-recovery.sh)
     /system/xbin/start_tv.sh  &
     │
     ▼
-All three services launch:
+All four services launch:
   - fuse_direct  (FUSE virtual disk)
-  - chisel       (Reverse tunnel → VPS)
+  - chisel       (Reverse tunnel → VPS with SOCKS5)
   - stream_fetcher (HTTP → FIFO)
+  - tv_watchdog  (USB gadget & process watchdog)
 ```
 
 After 15–20 seconds from power-on:
 - Tablet is reachable via `./connect_tablet.sh`
 - USB gadget serving `tv_stream.img` (plug cable into TV)
+- Watchdog enforcing `mass_storage,adb` and screen backlight at 0
 - Stream playing live TV
+
 
 ---
 
@@ -271,3 +274,44 @@ The standard one-click root APKs (KingoRoot, Framaroot, Towelroot) **do not supp
 6. Disable stock recovery restoration: rename `install-recovery.sh` and `recovery-from-boot.p`
 
 > **All rooting tools and the TWRP image are preserved in this repository.**
+
+---
+
+## 11. Reverse SOCKS5 & HTTP Residential Proxy (VOD CDN Bypass)
+
+### The Problem
+Upstream VOD streams (`/movie/`, `/series/`, and CDNs such as `fontedecanais`) enforce strict Cloudflare and datacenter IP blocks. HTTP GET requests from Oracle Cloud VPS IPs (`129.146.5.64`) return `403 Forbidden`. Requests from residential IPs return `200 OK`.
+
+### The Solution: Double-Tied Proxy
+1. **Chisel Reverse SOCKS5**:
+   The tablet's Chisel client passes `R:0.0.0.0:1080:socks` alongside the ADB tunnel:
+   ```bash
+   /system/xbin/chisel client --keepalive 15s --auth tablet:tvbridge2026 http://tv.smre.run.place/chisel R:25555:127.0.0.1:5555 R:0.0.0.0:1080:socks
+   ```
+   The VPS Chisel server listens on port `1080` (accessible to the Docker bridge network `172.20.0.1:1080`). All traffic routed through port `1080` exits through the tablet's residential Wi-Fi (`177.131.189.142`).
+2. **Privoxy HTTP-to-SOCKS5 Bridge**:
+   FFmpeg's native HTTP protocol only supports HTTP proxies (not SOCKS proxies) for byte-range requests. Privoxy is installed on the VPS host listening on `172.20.0.1:8118` forwarding to `127.0.0.1:1080`.
+   - `build_ffmpeg_cmd` in `server.py` detects VOD streams (`.mp4`, `.mkv`, `fontedecanais`, `movie`, `series`, YouTube) and passes `-http_proxy http://172.20.0.1:8118`.
+   - Direct SOCKS5 (`172.20.0.1:1080`) remains available for `yt-dlp` for future YouTube streaming.
+
+---
+
+## 12. USB Gadget Watchdog, Disconnect Recovery & Power Management
+
+### MTP Fallback Bug & Root Cause
+Whenever the TV was power-cycled or the USB cable was momentarily replugged, the Android kernel detected a 5V VBUS drop. Samsung's `UsbDeviceManager` automatically reverted `sys.usb.config` to the default system setting (`persist.sys.usb.config = mtp,adb`).
+Because the tablet identified itself as an MTP media player, the Samsung Plasma TV (which strictly supports USB Mass Storage SCSI drives) reported *"No USB device connected"*.
+
+### The Fix
+1. **System Property Enactment**:
+   Set `persist.sys.usb.config=mass_storage,adb` and `sys.usb.config=mass_storage,adb`.
+2. **Watchdog Daemon (`tv_watchdog.sh`)**:
+   Runs as a background daemon on the tablet every 2 seconds:
+   - Enforces `functions` contains `mass_storage`.
+   - Re-anchors `f_mass_storage/lun0/file` to `/data/local/tmp/vfat_mnt/tv_stream.img`.
+   - Enforces `f_mass_storage/lun0/ro = 1` before enabling the gadget.
+   - Monitors `stream_fetcher` and `chisel` processes.
+3. **Power & Backlight Optimization**:
+   The Samsung Plasma TV USB port provides 500mA max. The tablet's screen stay-awake was drawing excessive power, dropping battery voltage to `3603 mV`.
+   The watchdog keeps panel brightness at `0` (`/sys/class/backlight/panel/brightness`), allowing the tablet to steadily charge at `3850 mV` from the TV USB port.
+

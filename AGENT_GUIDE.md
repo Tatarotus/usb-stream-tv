@@ -515,7 +515,17 @@ Modern IPTV providers (studut.shop) use non-standard segment extensions that FFm
 ### 10. The `fuse_direct` binary must be statically linked
 Android doesn't have standard Linux shared libraries. `-static` is mandatory.
 
+### 11. Android reverts to MTP on cable disconnect unless locked
+When the TV power cycles or the USB cable is unplugged, Android's `UsbDeviceManager` resets `sys.usb.config` to `persist.sys.usb.config`. The property `persist.sys.usb.config=mass_storage,adb` must be set, and `tv_watchdog.sh` must actively enforce `mass_storage` every 2 seconds.
+
+### 12. Upstream VOD CDNs block Datacenter IPs (HTTP 403)
+Live IPTV channels accept VPS connections, but VOD movies/series (e.g. `fontedecanais`) 302-redirect to Cloudflare-protected CDNs that return 403 Forbidden to datacenter IPs. The Chisel reverse SOCKS5 tunnel (`R:0.0.0.0:1080:socks`) + Privoxy HTTP forwarder (`:8118`) routes VOD requests through the residential connection of the tablet.
+
+### 13. Screen brightness must be 0 to stay within 500mA TV USB limits
+TV USB 2.0 ports deliver only 450–500mA. Running screen backlight + Wi-Fi + CPU causes voltage drops (`<3650 mV`) and crashes or trips TV over-current protection. The watchdog enforces `/sys/class/backlight/panel/brightness = 0`.
+
 ---
+
 
 ## 11. File Reference
 

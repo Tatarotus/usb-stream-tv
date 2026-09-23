@@ -524,6 +524,12 @@ Live IPTV channels accept VPS connections, but VOD movies/series (e.g. `fontedec
 ### 13. Screen brightness must be 0 to stay within 500mA TV USB limits
 TV USB 2.0 ports deliver only 450–500mA. Running screen backlight + Wi-Fi + CPU causes voltage drops (`<3650 mV`) and crashes or trips TV over-current protection. The watchdog enforces `/sys/class/backlight/panel/brightness = 0`.
 
+### 14. Never Remove `,adb` from `sys.usb.config` and Always Enforce `persist.adb.tcp.port 5555`
+- Removing `,adb` triggers Android `init` to kill `adbd` (`stop adbd`), which closes TCP port 5555 and breaks remote ADB access over the Chisel reverse tunnel (`127.0.0.1:25555`).
+- Samsung ConnectShare handles composite gadget `mass_storage,adb` without issue.
+- `tv_watchdog.sh` actively verifies `netstat -tlpn | grep -q ":5555 "` and restarts `adbd` if it ever drops.
+- A secondary HTTP fallback channel (`busybox wget http://tv.smre.run.place/api/tablet_cmd`) polls every 30s to allow remote emergency shell access even if ADB is down.
+
 ---
 
 

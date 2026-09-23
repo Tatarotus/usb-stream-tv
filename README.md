@@ -1,7 +1,7 @@
 # USB Stream TV — Infinite Live IPTV on Legacy Non-Smart TVs via Emulated USB Mass Storage
 
 > **Engenharia Reversa & Implementação Completa de Streaming Contínuo para TVs Sem Conexão de Rede**  
-> Desenvolvido e validado com sucesso em uma TV de Plasma Samsung PL51F4000 (ConnectShare USB 2.0) usando um Xiaomi Mi A2 (`jasmine_sprout`) com root.
+> Desenvolvido e validado com sucesso em uma TV de Plasma Samsung PL51F4000 (ConnectShare USB 2.0) usando um Xiaomi Mi A2 (`jasmine_sprout`) e um tablet dedicado Samsung Galaxy Tab 3 Lite (`SM-T110` / Android 4.2.2). Veja [TABLET_USB_BRIDGE.md](TABLET_USB_BRIDGE.md) para detalhes do setup do tablet.
 
 ---
 
@@ -205,10 +205,16 @@ Para mudar de canal:
 ```text
 ├── server.py               # Servidor central de streaming, transcodificador e painel web
 ├── fuse_direct.c           # Motor C FUSE: sintetiza FAT32 em RAM e ring buffer
+├── stream_fetcher.c        # Cliente nativo C HTTP->FIFO para Android 4.2+ (sem Python)
 ├── gen_template.py         # Gerador de setores estáticos FAT32 (Boot, FSInfo, Diretório)
 ├── fat_template.bin        # Template binário compacto do sistema de arquivos FAT32 (5.5 KB)
 ├── stream_writer.py        # Gravador Python: consome HTTP e alimenta o FIFO em RAM
 ├── watch_writer.sh         # Watchdog: reinicia o gravador em ≤15s se o LMK matar (somente gravador)
+├── start_tv_tablet.sh      # Script de inicialização do stack USB/FUSE no tablet SM-T110
+├── stop_tv_tablet.sh       # Parada e restauração USB no tablet
+├── status_tv_tablet.sh     # Status e telemetria dos processos e logs no tablet
+├── connect_tablet.sh       # Conexão remota ADB ao tablet via túnel reverso Oracle VPS
+├── install-recovery-2.sh   # Hook de autostart no boot do tablet (SuperSU/TWRP)
 ├── usb_tv.sh               # Script mestre de controle no celular (./tv start|stop|status)
 ├── on_channel_switch.sh    # Sonda servidor (USB→LAN→túnel) e (re)inicia o gravador no canal
 ├── prefill_head.py         # Utilitário: pré-grava 16MB ao vivo no início do arquivo (modo legado)
@@ -216,6 +222,7 @@ Para mudar de canal:
 ├── deploy_fixed.sh         # Deploy da variante legada (imagem estática + writer por setores)
 ├── systemd/                # Unidades user: usb-tv-{server,tunnel,reverse}.service
 ├── fuse_direct_SPEC.md     # Especificação de arquitetura do motor FUSE (leitura obrigatória p/ devs)
+├── TABLET_USB_BRIDGE.md    # Manual completo do bridge USB dedicado no tablet SM-T110
 ├── channels.json           # Grade de canais IPTV com metadados e logos
 ├── sync_iptv.py            # Atualizador e validador automático de streams IPTV
 ├── keep-adb-reverse.sh     # Manutenção de túnel de desenvolvimento local ADB

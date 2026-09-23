@@ -468,11 +468,7 @@ int main(int argc, char **argv) {
     if (argc > 3) load_template(argv[3]);
     else load_template(DEF_TMPL);
 
-    {
-        char cmd[512];
-        snprintf(cmd, sizeof cmd, "mkdir -p %s", mnt);
-        if (system(cmd) != 0) return 1;
-    }
+    mkdir(mnt, 0755);
     umount2(mnt, MNT_DETACH);
 
     fuse_fd = open("/dev/fuse", O_RDWR);
@@ -493,7 +489,11 @@ int main(int argc, char **argv) {
 
     while (running) {
         ssize_t n = read(fuse_fd, in_buf, sizeof(in_buf));
-        if (n < 0) { if (errno == EINTR) continue; break; }
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno != ENODEV) perror("fuse read error");
+            break;
+        }
         if (n < (ssize_t)sizeof(struct fuse_in_header)) continue;
         struct fuse_in_header *inh = (struct fuse_in_header *)in_buf;
         void *payload = in_buf + sizeof(struct fuse_in_header);
@@ -503,14 +503,22 @@ int main(int argc, char **argv) {
             struct fuse_out_header *oh = (struct fuse_out_header *)out_buf;
             struct fuse_init_out *io = (struct fuse_init_out *)(out_buf + sizeof(struct fuse_out_header));
             memset(out_buf, 0, sizeof(struct fuse_out_header) + sizeof(struct fuse_init_out));
-            oh->len = sizeof(struct fuse_out_header) + sizeof(struct fuse_init_out);
             oh->error = 0; oh->unique = inh->unique;
             io->major = FUSE_KERNEL_VERSION;
-            io->minor = FUSE_KERNEL_MINOR_VERSION;
+            io->minor = ii->minor < FUSE_KERNEL_MINOR_VERSION ? ii->minor : FUSE_KERNEL_MINOR_VERSION;
             io->max_readahead = 128 * 1024;
             io->flags = ii->flags & (FUSE_ASYNC_READ | FUSE_BIG_WRITES);
             io->max_write = 128 * 1024;
-            if (write(fuse_fd, out_buf, oh->len) < 0) break;
+            if (ii->minor < 23) {
+                /* FUSE_COMPAT_22_INIT_OUT_SIZE = 24 bytes for Linux <= 3.13 */
+                oh->len = sizeof(struct fuse_out_header) + 24;
+            } else {
+                oh->len = sizeof(struct fuse_out_header) + sizeof(struct fuse_init_out);
+            }
+            if (write(fuse_fd, out_buf, oh->len) < 0) {
+                perror("write FUSE_INIT reply");
+                break;
+            }
         } else if (inh->opcode == FUSE_GETATTR) {
             struct fuse_out_header *oh = (struct fuse_out_header *)out_buf;
             struct fuse_attr_out *ao = (struct fuse_attr_out *)(out_buf + sizeof(struct fuse_out_header));

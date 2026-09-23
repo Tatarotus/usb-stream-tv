@@ -23,3 +23,15 @@ fuse_sensor_x86
 
 # OS files
 .DS_Store
+
+# Temporary / failed root exploit artifacts & scratch
+*.apk
+payload_*
+run_as*
+run-as*
+dirtycow_*
+supersu_pkg/
+supersu.zip
+supersu_v276.zip
+new_default.prop
+scratch/

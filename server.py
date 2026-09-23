@@ -210,37 +210,36 @@ class SeamlessRestamper:
     Garante que timestamps (PTS, DTS, PCR) e contadores de continuidade (CC)
     avancem estritamente de forma contínua e crescente mesmo durante a troca de canais,
     sem salto temporal para trás, sem desync de áudio AC3 e preservando a ordem dos B-frames.
+    O fluxo de vídeo é o relógio mestre (master clock); o áudio acompanha o offset mestre
+    sem causar mutações ou oscilações no relógio geral.
     """
     def __init__(self):
         self.rem = bytearray()
         self.pts_offset = None  # None until first video PTS anchors the epoch
         self.max_pts_seen = 90000
         self.first_pts_in_epoch = None
-        # 3s base margin: audio/B-frames leading the first video PES by
-        # <3s never underflow (per review); small leftovers hit wrap33's
-        # [-180000, 0) window instead of minting 26h giants.
         self.target_base_pts = 270000
         self.cc_map = {}
-        self.last_out_pts = None
-        self.prev_in_pts = None
+        self.last_out_video_pts = None
+        self.prev_in_video_pts = None
+        self.last_out_audio_pts = None
 
     def reset_epoch(self):
         self.first_pts_in_epoch = None
         self.target_base_pts = 270000
         self.max_pts_seen = 90000
-        self.last_out_pts = None
-        self.prev_in_pts = None
+        self.last_out_video_pts = None
+        self.prev_in_video_pts = None
+        self.last_out_audio_pts = None
         self.pts_offset = None
         log_event("PTS_EPOCH_RESET (target_base_pts=270000)")
 
     def start_new_channel(self):
         self.first_pts_in_epoch = None
         self.target_base_pts = self.max_pts_seen + 3000
-        self.last_out_pts = None
-        self.prev_in_pts = None
-        # Invalidate offset: PCR/PTS packets arriving before the new
-        # epoch's first video PTS must pass through untouched, never
-        # stamped with the previous channel's offset (per review).
+        self.last_out_video_pts = None
+        self.prev_in_video_pts = None
+        self.last_out_audio_pts = None
         self.pts_offset = None
 
     def process_chunk(self, data):
@@ -282,11 +281,6 @@ class SeamlessRestamper:
                 af_len = out[i+4]
                 offset += 1 + af_len
                 if af_len >= 7 and (out[i+5] & 0x10):
-                    # Skip PCR rewrite until the epoch is anchored (offset
-                    # None at startup / right after a channel switch):
-                    # stamping with a stale/None offset mints garbage clocks
-                    # (per review). Falls through to PTS processing below so
-                    # anchoring still happens on PCR-carrying PES packets.
                     if self.pts_offset is not None:
                         pcr_bytes = out[i+6:i+12]
                         base = (pcr_bytes[0] << 25) | (pcr_bytes[1] << 17) | (pcr_bytes[2] << 9) | (pcr_bytes[3] << 1) | (pcr_bytes[4] >> 7)
@@ -299,7 +293,9 @@ class SeamlessRestamper:
             if has_payload and pusi and offset + 9 <= 188:
                 if out[i+offset:i+offset+3] == b'\x00\x00\x01':
                     sid = out[i+offset+3]
-                    if (0xC0 <= sid <= 0xDF) or (0xE0 <= sid <= 0xEF) or (sid == 0xBD):
+                    is_video = (0xE0 <= sid <= 0xEF)
+                    is_audio = (0xC0 <= sid <= 0xDF) or (sid == 0xBD)
+                    if is_video or is_audio:
                         flags2 = out[i+offset+7]
                         pts_flag = (flags2 & 0x80) >> 7
                         dts_flag = (flags2 & 0x40) >> 6
@@ -307,61 +303,59 @@ class SeamlessRestamper:
                         if pts_flag and p_pos + 5 <= i + 188:
                             b = out[p_pos:p_pos+5]
                             in_pts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
-                            if self.first_pts_in_epoch is None:
-                                self.first_pts_in_epoch = in_pts
-                                self.pts_offset = self.target_base_pts - in_pts
+                            
+                            if is_video:
+                                if self.first_pts_in_epoch is None:
+                                    self.first_pts_in_epoch = in_pts
+                                    self.pts_offset = self.target_base_pts - in_pts
 
-                            out_pts = wrap33(in_pts + self.pts_offset)
-                            if out_pts > self.max_pts_seen:
-                                self.max_pts_seen = out_pts
-
-                            # SOURCE ROLLOVER vs RESET (unified, output-centric):
-                            # Genuine 33-bit wraps AND origin resets (ad-splice,
-                            # encoder restart) both appear as |delta| > 2^32.
-                            # A dedicated wrap branch got this fatally wrong:
-                            # it ADDED 2^33 on resets, minting 26h timestamps
-                            # (duration 26:29:43, out-of-order DTS). Instead,
-                            # ALWAYS re-base for smooth continuation — the
-                            # mask arithmetic makes this correct for genuine
-                            # wraps too.
-                            if self.prev_in_pts is not None:
-                                dra = in_pts - self.prev_in_pts
-                                if dra < -(1 << 32) or dra > (1 << 32):
-                                    # out_pts below holds the pre-rebase value.
-                                    self.pts_offset += (self.last_out_pts + 3600) - out_pts if self.last_out_pts is not None else 0
+                                if self.pts_offset is not None:
                                     out_pts = wrap33(in_pts + self.pts_offset)
                                     if out_pts > self.max_pts_seen:
                                         self.max_pts_seen = out_pts
-                                    log_event(f"PTS_REBASE dra={dra/90000:+.0f}s")
-                            self.prev_in_pts = in_pts
 
-                            if self.last_out_pts is not None:
-                                jump = out_pts - self.last_out_pts
-                                # B-frames legitimately step slightly backward;
-                                # only log real breaks (>0.5s back or >60s fwd).
-                                if jump < -45000 or jump > 5400000:
-                                    log_event(f"PTS_JUMP {jump/90000:+.1f}s (out_pts={out_pts})")
-                                # SMOOTH mid-stream source jumps: re-base so output
-                                # continues seamlessly (>1s back or >5s forward).
-                                # NOTE: PCR for this same packet was already written
-                                # with the pre-rebase offset (PCR block runs
-                                # first). One-packet PCR outlier per smoothing
-                                # event; TV clock PLLs ride through it. The
-                                # alternative (two-pass restructure) isn't worth
-                                # the risk for an event this rare.
-                                if jump < -90000 or jump > 450000:
-                                    self.pts_offset += (self.last_out_pts + 3600) - out_pts
+                                    if self.prev_in_video_pts is not None:
+                                        dra = in_pts - self.prev_in_video_pts
+                                        if dra < -(1 << 32) or dra > (1 << 32):
+                                            self.pts_offset += (self.last_out_video_pts + 3000) - out_pts if self.last_out_video_pts is not None else 0
+                                            out_pts = wrap33(in_pts + self.pts_offset)
+                                            if out_pts > self.max_pts_seen:
+                                                self.max_pts_seen = out_pts
+                                            log_event(f"PTS_REBASE dra={dra/90000:+.0f}s")
+                                    self.prev_in_video_pts = in_pts
+
+                                    if self.last_out_video_pts is not None:
+                                        jump = out_pts - self.last_out_video_pts
+                                        if jump < -45000 or jump > 5400000:
+                                            log_event(f"PTS_JUMP {jump/90000:+.1f}s (out_pts={out_pts})")
+                                        if jump < -90000 or jump > 450000:
+                                            self.pts_offset += (self.last_out_video_pts + 3000) - out_pts
+                                            out_pts = wrap33(in_pts + self.pts_offset)
+                                            if out_pts > self.max_pts_seen:
+                                                self.max_pts_seen = out_pts
+                                    self.last_out_video_pts = out_pts
+                                    out[p_pos:p_pos+5] = encode_ts_timestamp(out_pts, 3 if dts_flag else 2)
+
+                                    if dts_flag and p_pos + 10 <= i + 188:
+                                        b = out[p_pos+5:p_pos+10]
+                                        in_dts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
+                                        out_dts = wrap33(in_dts + self.pts_offset)
+                                        out[p_pos+5:p_pos+10] = encode_ts_timestamp(out_dts, 1)
+
+                            elif is_audio:
+                                # O áudio acompanha o offset mestre estabelecido pelo vídeo
+                                if self.pts_offset is not None:
                                     out_pts = wrap33(in_pts + self.pts_offset)
                                     if out_pts > self.max_pts_seen:
                                         self.max_pts_seen = out_pts
-                            self.last_out_pts = out_pts
-                            out[p_pos:p_pos+5] = encode_ts_timestamp(out_pts, 3 if dts_flag else 2)
+                                    self.last_out_audio_pts = out_pts
+                                    out[p_pos:p_pos+5] = encode_ts_timestamp(out_pts, 3 if dts_flag else 2)
 
-                            if dts_flag and p_pos + 10 <= i + 188:
-                                b = out[p_pos+5:p_pos+10]
-                                in_dts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
-                                out_dts = wrap33(in_dts + self.pts_offset)
-                                out[p_pos+5:p_pos+10] = encode_ts_timestamp(out_dts, 1)
+                                    if dts_flag and p_pos + 10 <= i + 188:
+                                        b = out[p_pos+5:p_pos+10]
+                                        in_dts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
+                                        out_dts = wrap33(in_dts + self.pts_offset)
+                                        out[p_pos+5:p_pos+10] = encode_ts_timestamp(out_dts, 1)
 
         return bytes(out)
 
@@ -436,6 +430,7 @@ def build_ffmpeg_cmd(url):
         "-x264-params", "repeat-headers=1",
 
         # Normalização sonora: AC3 (Dolby Digital) a 48kHz (padrão nativo de TV Samsung)
+        "-af", "aresample=async=1:first_pts=0",
         "-c:a", "ac3",
         "-b:a", "192k",
         "-ar", "48000",

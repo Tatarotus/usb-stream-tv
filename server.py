@@ -16,11 +16,16 @@ import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 import json
+import re
 
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", 8080))
 AUTH_PIN = os.environ.get("TV_PIN", "1233")
 STANDBY_TIMEOUT = float(os.environ.get("STANDBY_TIMEOUT", 90.0))
+XTREAM_UPSTREAM = os.environ.get("XTREAM_UPSTREAM", "http://studut.shop:80")
+XTREAM_STREAM_RE = re.compile(r'^/(?:(live|movie|series)/)?([^/]+)/([^/]+)/(\d+)(?:\.([a-zA-Z0-9]+))?$')
+XTREAM_CACHE = {}
+XTREAM_CACHE_LOCK = threading.Lock()
 
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 DEPLOY_FILE = os.path.join(CONFIG_DIR, "channels_deploy.json")
@@ -607,7 +612,7 @@ class StreamHub:
             try:
                 self.switching = True
                 if custom_url:
-                    target_id = "custom"
+                    target_id = f"custom_{custom_url}"
                     target_name = custom_name or "Canal Personalizado"
                     target_url = custom_url
                 elif channel_id:
@@ -721,12 +726,22 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_dashboard()
         elif path in ("/live.ts", "/stream"):
             self.stream_live_ts()
+        elif path in ("/player_api.php", "/xmltv.php"):
+            self.proxy_player_api("GET")
+        elif XTREAM_STREAM_RE.match(path):
+            m = XTREAM_STREAM_RE.match(path)
+            kind, user, pwd, stream_id, ext = m.groups()
+            self.handle_xtream_stream(kind or "live", user, pwd, stream_id, ext)
         elif path == "/api/status":
             self.send_status_json()
         elif path == "/api/channels":
             self.send_channels_json()
         elif path == "/api/groups":
             self.send_groups_json()
+        elif path == "/remote.m3u":
+            self.send_remote_m3u()
+        elif path.startswith("/remote/"):
+            self.handle_remote_play(path)
         elif path == "/api/logo":
             self.proxy_logo(query.get("url", [""])[0])
         elif path == "/fuse_direct_arm_verified":
@@ -764,6 +779,8 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/switch":
             self.handle_switch()
+        elif path in ("/player_api.php", "/xmltv.php"):
+            self.proxy_player_api("POST")
         elif path == "/api/sync":
             self.handle_sync()
         elif path == "/api/telemetry":
@@ -868,6 +885,137 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(res)
+
+    def send_remote_m3u(self):
+        channels = CH_MGR.get_all()
+        host = self.headers.get("Host", "127.0.0.1:8080")
+        lines = ["#EXTM3U"]
+        
+        for cid, ch in channels.items():
+            name = ch.get("name", cid)
+            group = ch.get("category", "General")
+            logo = ch.get("logo", "")
+            if not logo.startswith("http"):
+                logo = ""
+            
+            line1 = f'#EXTINF:-1 tvg-id="{cid}" tvg-name="{name}" tvg-logo="{logo}" group-title="{group}",{name}'
+            line2 = f'http://{host}/remote/{cid}.ts'
+            lines.append(line1)
+            lines.append(line2)
+            
+        res = "\n".join(lines).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(res)
+
+    def handle_remote_play(self, path):
+        basename = path.split("/")[-1]
+        cid = basename.replace(".ts", "")
+        
+        channels = CH_MGR.get_all()
+        if cid not in channels:
+            self.send_error(404, "Channel not found")
+            return
+            
+        HUB.switch_channel(cid)
+        print(f"[REMOTE] Triggered switch to {cid} via M3U. Serving live stream.")
+            
+        # Retorna o fluxo real de vídeo em vez da tela preta!
+        self.stream_live_ts()
+
+    def proxy_player_api(self, method="GET"):
+        parsed = urllib.parse.urlparse(self.path)
+        query_str = parsed.query
+        cache_key = f"{method}:{parsed.path}:{query_str}"
+        now = time.time()
+
+        # Cache para chamadas de lista (live streams / categories) por 120s
+        if method == "GET" and ("get_live" in query_str or "get_vod" in query_str or "get_series" in query_str):
+            with XTREAM_CACHE_LOCK:
+                if cache_key in XTREAM_CACHE:
+                    c_data, c_ctype, c_exp = XTREAM_CACHE[cache_key]
+                    if now < c_exp:
+                        self.send_response(200)
+                        self.send_header("Content-Type", c_ctype)
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.send_header("Content-Length", str(len(c_data)))
+                        self.end_headers()
+                        self.wfile.write(c_data)
+                        return
+
+        upstream_url = f"{XTREAM_UPSTREAM}{parsed.path}"
+        if query_str:
+            upstream_url += f"?{query_str}"
+
+        headers = {
+            "User-Agent": self.headers.get("User-Agent", "IPTVSmarters/3.1.1"),
+            "Accept": "*/*",
+        }
+
+        body = None
+        if method == "POST":
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 0:
+                body = self.rfile.read(length)
+                headers["Content-Type"] = self.headers.get("Content-Type", "application/x-www-form-urlencoded")
+
+        try:
+            req = urllib.request.Request(upstream_url, data=body, headers=headers, method=method)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = resp.read()
+                ctype = resp.headers.get("Content-Type", "application/json")
+
+                # Se for login/autenticação (sem action), reescreve a URL do server_info para a nossa VPS!
+                query = urllib.parse.parse_qs(query_str)
+                action = query.get("action", [""])[0]
+                if not action and (b"server_info" in data):
+                    try:
+                        js = json.loads(data.decode("utf-8", "ignore"))
+                        if "server_info" in js:
+                            host_header = self.headers.get("Host", "tv.smre.run.place")
+                            host_name = host_header.split(":")[0]
+                            js["server_info"]["url"] = host_name
+                            js["server_info"]["port"] = "80"
+                            js["server_info"]["server_protocol"] = "http"
+                            js["server_info"]["https_port"] = "443"
+                            data = json.dumps(js).encode("utf-8")
+                    except Exception as ex:
+                        print(f"[!] Erro ao reescrever server_info: {ex}")
+                elif method == "GET" and ("get_live" in query_str or "get_vod" in query_str or "get_series" in query_str):
+                    with XTREAM_CACHE_LOCK:
+                        if len(XTREAM_CACHE) > 50:
+                            XTREAM_CACHE.clear()
+                        XTREAM_CACHE[cache_key] = (data, ctype, now + 120.0)
+
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+        except Exception as e:
+            print(f"[!] Erro no proxy Xtream: {e}")
+            self.send_error(502, f"Upstream error: {e}")
+
+    def handle_xtream_stream(self, kind, user, pwd, stream_id, ext):
+        if kind == "movie":
+            target_url = f"{XTREAM_UPSTREAM}/movie/{user}/{pwd}/{stream_id}.{ext or 'mp4'}"
+            cname = f"Filme {stream_id}"
+        elif kind == "series":
+            target_url = f"{XTREAM_UPSTREAM}/series/{user}/{pwd}/{stream_id}.{ext or 'mp4'}"
+            cname = f"Série {stream_id}"
+        else:
+            # Padrão: canal ao vivo
+            target_url = f"{XTREAM_UPSTREAM}/live/{user}/{pwd}/{stream_id}.m3u8"
+            cname = f"Canal {stream_id}"
+
+        print(f"\n[⚡ XTREAM] App selecionou: {cname} -> {target_url}")
+        HUB.switch_channel(custom_url=target_url, custom_name=cname)
+
+        # Transmite ao vivo para o player do app simultaneamente
+        self.stream_live_ts()
 
     def handle_switch(self):
         length = int(self.headers.get("Content-Length", 0))

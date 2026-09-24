@@ -13,6 +13,7 @@ services:
       - RESIDENTIAL_HTTP_PROXY=http://172.20.0.1:8118
       - RESIDENTIAL_SOCKS_PROXY=socks5h://172.20.0.1:1080
       - STREAM_RESOLUTION=1080p
+      - SLATE_GAP_THRESHOLD=8.0
 
 
     volumes:

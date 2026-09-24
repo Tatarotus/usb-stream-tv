@@ -29,6 +29,7 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, handle_sig);
     signal(SIGTERM, handle_sig);
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGCHLD, SIG_IGN);
 
     setlinebuf(stdout);
     setlinebuf(stderr);
@@ -78,6 +79,9 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
+            int rcvbuf = 512 * 1024;
+            setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+
             char req[512];
             snprintf(req, sizeof(req),
                      "GET %s HTTP/1.1\r\n"
@@ -101,7 +105,11 @@ int main(int argc, char *argv[]) {
             while (hlen < sizeof(header_buf) - 1 && !header_done && running) {
                 char c;
                 ssize_t n = recv(sock, &c, 1, 0);
-                if (n <= 0) break;
+                if (n < 0) {
+                    if (errno == EINTR) continue;
+                    break;
+                }
+                if (n == 0) break;
                 header_buf[hlen++] = c;
                 header_buf[hlen] = '\0';
                 if (hlen >= 4 && memcmp(header_buf + hlen - 4, "\r\n\r\n", 4) == 0) {
@@ -124,7 +132,8 @@ int main(int argc, char *argv[]) {
 
             while (running) {
                 ssize_t n = recv(sock, buf, sizeof(buf), 0);
-                if (n <= 0) {
+                if (n < 0) {
+                    if (errno == EINTR) continue;
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
                         fprintf(stderr, "[!] Socket timeout. Reconnecting...\n");
                     } else {
@@ -132,12 +141,17 @@ int main(int argc, char *argv[]) {
                     }
                     break;
                 }
+                if (n == 0) {
+                    fprintf(stderr, "[!] Server connection closed cleanly. Reconnecting...\n");
+                    break;
+                }
 
                 size_t written = 0;
                 int pipe_err = 0;
                 while (written < (size_t)n) {
                     ssize_t wn = write(fifo_fd, buf + written, n - written);
-                    if (wn <= 0) {
+                    if (wn < 0) {
+                        if (errno == EINTR) continue;
                         if (errno == EPIPE) {
                             fprintf(stderr, "[!] FIFO reader closed (fuse_direct restarted?)\n");
                             pipe_err = 1;
@@ -147,6 +161,7 @@ int main(int argc, char *argv[]) {
                         pipe_err = 1;
                         break;
                     }
+                    if (wn == 0) continue;
                     written += wn;
                 }
                 if (pipe_err) {

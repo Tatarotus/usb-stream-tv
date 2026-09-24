@@ -24,8 +24,8 @@ while true; do
         start adbd 2>/dev/null
     fi
 
-    # 1b. Enforce ADB listening on TCP port 5555
-    if ! netstat -tlpn 2>/dev/null | grep -q ":5555 "; then
+    # 1b. Enforce ADB listening on TCP port 5555 (0x15B3 in hex, zero overhead via /proc/net/tcp)
+    if ! grep -q " 00000000:15B3 " /proc/net/tcp 2>/dev/null; then
         setprop persist.adb.tcp.port 5555
         setprop service.adb.tcp.port 5555
         stop adbd 2>/dev/null

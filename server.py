@@ -30,6 +30,8 @@ XTREAM_CACHE_LOCK = threading.Lock()
 RESIDENTIAL_HTTP_PROXY = os.environ.get("RESIDENTIAL_HTTP_PROXY", "http://172.20.0.1:8118")
 RESIDENTIAL_SOCKS_PROXY = os.environ.get("RESIDENTIAL_SOCKS_PROXY", "socks5h://172.20.0.1:1080")
 STREAM_RESOLUTION = os.environ.get("STREAM_RESOLUTION", "1080p").lower()
+SLATE_GAP_THRESHOLD = float(os.environ.get("SLATE_GAP_THRESHOLD", 1.5))
+SLATE_AUTO_SWITCH_TIMEOUT = float(os.environ.get("SLATE_AUTO_SWITCH_TIMEOUT", 0))
 
 
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -493,6 +495,15 @@ class StreamHub:
         self.tablet_pending_cmd = None
         self.tablet_cmd_res = None
         self.tablet_cmd_event = threading.Event()
+
+        # Slate video: carrega .ts pré-encodado na RAM para injeção durante gaps
+        self.slate_chunks = []  # list of (chunk_bytes, duration_secs)
+        self.slate_mode = False
+        self.slate_start_time = 0
+        self.stream_health = "ok"  # "ok", "degraded", "slate"
+        self.health_window = []  # list of (timestamp, byte_count)
+        self.health_window_size = 5.0  # seconds
+        self._load_slate()
         
         # Inicia transmissão do primeiro canal
         self._start_initial()
@@ -518,6 +529,53 @@ class StreamHub:
             )
         except Exception as e:
             print(f"[!] Erro ao iniciar processo inicial: {e}")
+
+    def _load_slate(self):
+        """Carrega o vídeo-placeholder 'Sem Sinal' na RAM, dividido em chunks com pacing exato."""
+        slate_file = "slate_1080p.ts" if STREAM_RESOLUTION == "1080p" else "slate.ts"
+        slate_path = os.path.join(CONFIG_DIR, slate_file)
+        if not os.path.exists(slate_path):
+            fallback = "slate.ts" if STREAM_RESOLUTION == "1080p" else "slate_1080p.ts"
+            fallback_path = os.path.join(CONFIG_DIR, fallback)
+            if os.path.exists(fallback_path):
+                slate_path = fallback_path
+                slate_file = fallback
+            else:
+                print(f"[!] Slate não encontrado: {slate_path}. Proteção contra travamento DESABILITADA.")
+                return
+        try:
+            with open(slate_path, "rb") as f:
+                raw = f.read()
+            total_pkts = len(raw) // 188
+            if total_pkts == 0:
+                print("[!] Slate vazio ou inválido.")
+                return
+            pps = total_pkts / 10.0  # slate tem duração de 10s
+            chunk_size = 348 * 188  # 65424 bytes
+            chunks_raw = [raw[i:i+chunk_size] for i in range(0, len(raw), chunk_size)]
+            self.slate_chunks = []
+            for c in chunks_raw:
+                if len(c) % 188 == 0 and len(c) > 0:
+                    dur = (len(c) // 188) / pps
+                    self.slate_chunks.append((c, dur))
+            total_kb = len(raw) / 1024
+            print(f"[✓] Slate carregado: {slate_file} ({total_kb:.0f} KB, {len(self.slate_chunks)} chunks)")
+        except Exception as e:
+            print(f"[!] Erro ao carregar slate: {e}")
+
+    def get_current_bitrate_kbps(self):
+        """Calcula bitrate médio em kbps dos últimos N segundos."""
+        now = time.time()
+        cutoff = now - self.health_window_size
+        with self.lock:
+            self.health_window = [(t, b) for t, b in self.health_window if t >= cutoff]
+            if not self.health_window:
+                return 0.0
+            total_bytes = sum(b for _, b in self.health_window)
+            span = now - self.health_window[0][0]
+            if span <= 0:
+                return 0.0
+            return (total_bytes * 8) / (span * 1000)
 
     def reset_pts_epoch(self):
         with self.lock:
@@ -615,6 +673,12 @@ class StreamHub:
                     if processed:
                         self.total_bytes += len(processed)
                         self.last_chunk_time = time.time()
+                        self.health_window.append((time.time(), len(processed)))
+                        if self.slate_mode:
+                            print("[✓] Upstream recuperou — saindo do modo Slate.")
+                            log_event("SLATE_EXIT (upstream recovered)")
+                            self.slate_mode = False
+                            self.stream_health = "ok"
                         self._broadcast(processed)
             else:
                 # Processo terminou e não estamos trocando de canal
@@ -629,17 +693,74 @@ class StreamHub:
                     time.sleep(0.01)
 
     def _keepalive_loop(self):
-        # Pacotes MPEG-TS de preenchimento nulo (PID 0x1FFF / 8191)
-        # Padrão ISO/IEC 13818-1: decodificadores de hardware da TV ignoram,
-        # mas o leitor USB continua recebendo dados sem esgotamento de buffer
+        """Keepalive inteligente com injeção de Slate Video.
+        
+        Quando FFmpeg para de produzir dados por > SLATE_GAP_THRESHOLD segundos,
+        injeta o vídeo 'Sem Sinal' pré-encodado em loop, mantendo o decodificador
+        H.264 do ConnectShare ativo e evitando travamento da TV.
+        
+        Fallback: se o slate não foi carregado, envia NULL packets (comportamento legado).
+        """
         null_pkt = b'\x47\x1f\xff\x10' + b'\xff' * 184
-        null_burst = null_pkt * 174 # ~32 KB
+        null_burst = null_pkt * 174  # ~32 KB
+
+        slate_idx = 0
+        last_slate_broadcast = 0.0
+        next_slate_pace = 0.0
+
         while self.running:
-            time.sleep(0.2)
-            if len(self.subscribers) > 0 and not self.switching:
-                if time.time() - self.last_chunk_time > 0.6:
+            time.sleep(0.05)
+            if len(self.subscribers) == 0 or self.switching or self.in_standby:
+                continue
+
+            gap = time.time() - self.last_chunk_time
+
+            if gap <= 0.6:
+                # Stream saudável
+                if self.slate_mode:
+                    print("[✓] Upstream recuperou — saindo do modo Slate.")
+                    log_event("SLATE_EXIT (upstream recovered)")
+                    self.slate_mode = False
+                    self.stream_health = "ok"
+                    slate_idx = 0
+                continue
+
+            # Gap detectado: decidir entre NULL packets e Slate
+            if gap < SLATE_GAP_THRESHOLD:
+                # Gap curto (0.6s–1.5s): NULL packets legados
+                if self.stream_health == "ok":
+                    self.stream_health = "degraded"
+                with self.lock:
+                    self._broadcast(null_burst)
+                continue
+
+            # Gap longo (> 1.5s): modo Slate!
+            if self.slate_chunks:
+                if not self.slate_mode:
+                    print(f"[⚠] Gap de {gap:.1f}s detectado — entrando no modo Slate (Sem Sinal).")
+                    log_event(f"SLATE_ENTER gap={gap:.1f}s")
+                    self.slate_mode = True
+                    self.slate_start_time = time.time()
+                    self.stream_health = "slate"
+                    slate_idx = 0
+                    next_slate_pace = 0.0
+
+                now = time.time()
+                if now - last_slate_broadcast >= next_slate_pace:
+                    chunk, dur = self.slate_chunks[slate_idx % len(self.slate_chunks)]
                     with self.lock:
-                        self._broadcast(null_burst)
+                        processed = self.restamper.process_chunk(chunk)
+                        if processed:
+                            self._broadcast(processed)
+                    slate_idx += 1
+                    last_slate_broadcast = now
+                    next_slate_pace = dur
+            else:
+                # Fallback sem slate: NULL packets legados
+                if self.stream_health != "slate":
+                    self.stream_health = "degraded"
+                with self.lock:
+                    self._broadcast(null_burst)
 
     def switch_channel(self, channel_id=None, custom_url=None, custom_name=None):
         if not self.switch_lock.acquire(blocking=True, timeout=4.0):
@@ -909,6 +1030,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             "in_standby": HUB.in_standby,
             "total_mb": round(HUB.total_bytes / (1024 * 1024), 2),
             "uptime_secs": int(time.time() - HUB.start_time),
+            "stream_health": HUB.stream_health,
+            "stream_bitrate_kbps": round(HUB.get_current_bitrate_kbps(), 1),
+            "slate_mode": HUB.slate_mode,
+            "slate_active_secs": round(time.time() - HUB.slate_start_time, 1) if HUB.slate_mode else 0,
             "client": client_data
         }
         res = json.dumps(data).encode("utf-8")

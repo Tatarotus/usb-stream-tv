@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     ca-certificates \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -13,6 +14,10 @@ WORKDIR /app
 COPY server.py ./
 COPY channels_deploy.json ./
 COPY channels.json ./
+COPY generate_slate.sh ./
+
+# Generate slate video files (720p and 1080p)
+RUN chmod +x generate_slate.sh && ./generate_slate.sh /app
 
 # Default environment variables
 ENV HOST=0.0.0.0 \

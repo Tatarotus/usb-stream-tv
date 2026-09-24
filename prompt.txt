@@ -1,0 +1,18 @@
+
+Atualmente, meu workflow para assistir IPTV na TV funciona da seguinte forma:
+
+Quando um canal, algo relativamente comum em transmissões IPTV, apresenta oscilações, perda de pacotes ou fica algum período sem enviar dados, o arquivo `.ts` pode fazer o player da TV (ConnectShare) travar.
+
+O problema é que, depois que isso acontece, trocar de canal pelo controle web ou pelo aplicativo nem sempre recupera a reprodução. Na prática, preciso desconectar e conectar novamente o dispositivo USB para que a TV atualize/reabra a transmissão.
+
+Isso é particularmente inconveniente porque nem sempre sei antecipadamente quais canais estão funcionando de forma estável.
+
+Estou pensando em criar algum tipo de listener/monitor na VPS que acompanhe a saúde de cada transmissão. Caso seja detectada uma interrupção, queda significativa no bitrate ou ausência de pacotes por determinado período, o sistema poderia automaticamente enviar pacotes sinteticos ou um video escrito "em manutenção ou no signal" na stream ou tomar alguma outra ação para impedir que a TV receba um fluxo que faça o ConnectShare travar.
+
+Quero descobrir se existe uma solução melhor do que essa, ou gostaria que você analisasse essa ideia de forma mais ampla antes de implementá-la.
+
+
+Quero uma solução robusta, que minimize a possibilidade de a TV entrar nesse estado de travamento e que elimine, sempre que possível, a necessidade de desconectar e reconectar manualmente o USB.
+
+Antes de implementar, explique os trade-offs e caminhos proponha uma estratégia de implementação  depois de aprovado apenas crie o plano de implementação em  markdown para se possível outro agente executar
+

@@ -472,34 +472,38 @@ def resolve_youtube(yt_url):
 def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False):
     is_http = url.startswith("http://") or url.startswith("https://")
     url_lower = url.lower()
+    is_googlevideo = "googlevideo" in url_lower or (audio_url and "googlevideo" in audio_url.lower())
     is_vod = any(x in url_lower for x in [
         "fontedecanais", "/movie/", "/series/", "movies/", "series/",
         ".mp4", ".mkv", "googlevideo.com"
     ])
     if is_live:
         is_vod = False
-    elif audio_url or "googlevideo.com" in url_lower:
+    elif audio_url or is_googlevideo:
         is_vod = True
 
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning"
     ]
 
-    use_re = (not is_http or is_vod) and not is_live
+    # -re APENAS para arquivos locais em disco (/filmes/*.mp4).
+    # NUNCA usar -re para streams de rede (YouTube, HLS, IPTV), pois o cliente
+    # precisa poder preencher o buffer de RAM (fuse_direct) para absorver oscilações.
+    use_re = (not is_http)
 
     # Input 0: Vídeo principal (ou vídeo+áudio progressivo)
     if use_re:
         cmd.append("-re")
 
     if is_http:
-        ua = "Mozilla/5.0" if ("studut.shop" in url or "m3u8" in url or "googlevideo" in url_lower) else "IPTVSmartersPro"
+        ua = "Mozilla/5.0" if ("studut.shop" in url or "m3u8" in url or is_googlevideo) else "IPTVSmartersPro"
         cmd.extend(["-user_agent", ua])
 
-        # Proxy residencial para IPTV ou se o YouTube exigiu proxy
-        if (use_proxy or (is_vod and "googlevideo" not in url_lower)) and RESIDENTIAL_HTTP_PROXY:
+        # Proxy residencial APENAS para IPTV com bloqueio Cloudflare, NUNCA para googlevideo
+        if not is_googlevideo and (use_proxy or is_vod) and RESIDENTIAL_HTTP_PROXY:
             cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
 
-        if ".mp4" in url_lower or ".mkv" in url_lower or "googlevideo" in url_lower:
+        if ".mp4" in url_lower or ".mkv" in url_lower or is_googlevideo:
             cmd.extend([
                 "-reconnect", "1",
                 "-reconnect_delay_max", "3"
@@ -532,7 +536,7 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False):
             "-probesize", "1000000",
             "-analyzeduration", "2000000"
         ])
-        if (use_proxy or (is_vod and "googlevideo" not in url_lower)) and RESIDENTIAL_HTTP_PROXY:
+        if not is_googlevideo and (use_proxy or is_vod) and RESIDENTIAL_HTTP_PROXY:
             cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
         cmd.extend(["-i", audio_url])
 

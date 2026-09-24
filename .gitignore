@@ -20,6 +20,7 @@ bin/cloudflared
 fuse_direct
 fuse_sensor
 fuse_sensor_x86
+chisel_arm64
 
 # OS files
 .DS_Store

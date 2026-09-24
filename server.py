@@ -283,13 +283,14 @@ class SeamlessRestamper:
                 af_len = out[i+4]
                 offset += 1 + af_len
                 if af_len >= 7 and (out[i+5] & 0x10):
-                    if self.pts_offset is not None:
-                        pcr_bytes = out[i+6:i+12]
-                        base = (pcr_bytes[0] << 25) | (pcr_bytes[1] << 17) | (pcr_bytes[2] << 9) | (pcr_bytes[3] << 1) | (pcr_bytes[4] >> 7)
-                        ext = ((pcr_bytes[4] & 0x01) << 8) | pcr_bytes[5]
-                        in_pcr = base * 300 + ext
-                        out_pcr = wrap46(in_pcr + (self.pts_offset * 300))
-                        out[i+6:i+12] = encode_pcr(out_pcr)
+                    pcr_bytes = out[i+6:i+12]
+                    base = (pcr_bytes[0] << 25) | (pcr_bytes[1] << 17) | (pcr_bytes[2] << 9) | (pcr_bytes[3] << 1) | (pcr_bytes[4] >> 7)
+                    ext = ((pcr_bytes[4] & 0x01) << 8) | pcr_bytes[5]
+                    in_pcr = base * 300 + ext
+                    if self.pts_offset is None:
+                        self.pts_offset = self.target_base_pts - base
+                    out_pcr = wrap46(in_pcr + (self.pts_offset * 300))
+                    out[i+6:i+12] = encode_pcr(out_pcr)
 
             # Normalização de PTS e DTS (Áudio MPEG 0xC0-DF, Vídeo 0xE0-EF, Áudio AC3 Dolby 0xBD)
             if has_payload and pusi and offset + 9 <= 188:
@@ -306,11 +307,12 @@ class SeamlessRestamper:
                             b = out[p_pos:p_pos+5]
                             in_pts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
                             
-                            if is_video:
-                                if self.first_pts_in_epoch is None:
-                                    self.first_pts_in_epoch = in_pts
-                                    self.pts_offset = self.target_base_pts - in_pts
+                            # O primeiro pacote (áudio ou vídeo) estabelece a âncora do offset para a nova época
+                            if self.first_pts_in_epoch is None:
+                                self.first_pts_in_epoch = in_pts
+                                self.pts_offset = self.target_base_pts - in_pts
 
+                            if is_video:
                                 if self.pts_offset is not None:
                                     out_pts = wrap33(in_pts + self.pts_offset)
                                     if out_pts > self.max_pts_seen:
@@ -319,7 +321,7 @@ class SeamlessRestamper:
                                     if self.prev_in_video_pts is not None:
                                         dra = in_pts - self.prev_in_video_pts
                                         if dra < -(1 << 32) or dra > (1 << 32):
-                                            self.pts_offset += (self.last_out_video_pts + 3000) - out_pts if self.last_out_video_pts is not None else 0
+                                            self.pts_offset = (self.last_out_video_pts + 3000) - in_pts if self.last_out_video_pts is not None else (self.target_base_pts - in_pts)
                                             out_pts = wrap33(in_pts + self.pts_offset)
                                             if out_pts > self.max_pts_seen:
                                                 self.max_pts_seen = out_pts
@@ -331,7 +333,8 @@ class SeamlessRestamper:
                                         if jump < -45000 or jump > 5400000:
                                             log_event(f"PTS_JUMP {jump/90000:+.1f}s (out_pts={out_pts})")
                                         if jump < -90000 or jump > 450000:
-                                            self.pts_offset += (self.last_out_video_pts + 3000) - out_pts
+                                            # Re-ancora diretamente em in_pts sem absorver artefatos de wrap 33-bit
+                                            self.pts_offset = (self.last_out_video_pts + 3000) - in_pts
                                             out_pts = wrap33(in_pts + self.pts_offset)
                                             if out_pts > self.max_pts_seen:
                                                 self.max_pts_seen = out_pts
@@ -345,9 +348,13 @@ class SeamlessRestamper:
                                         out[p_pos+5:p_pos+10] = encode_ts_timestamp(out_dts, 1)
 
                             elif is_audio:
-                                # O áudio acompanha o offset mestre estabelecido pelo vídeo
+                                # O áudio acompanha o offset mestre
                                 if self.pts_offset is not None:
                                     out_pts = wrap33(in_pts + self.pts_offset)
+                                    # Proteção estrita de monotonicidade: o decodificador de hardware da Samsung
+                                    # entra em mute se o PTS do áudio recuar ou estagnar em relação ao último frame
+                                    if self.last_out_audio_pts is not None and out_pts <= self.last_out_audio_pts:
+                                        out_pts = wrap33(self.last_out_audio_pts + 2880)
                                     if out_pts > self.max_pts_seen:
                                         self.max_pts_seen = out_pts
                                     self.last_out_audio_pts = out_pts
@@ -357,6 +364,8 @@ class SeamlessRestamper:
                                         b = out[p_pos+5:p_pos+10]
                                         in_dts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
                                         out_dts = wrap33(in_dts + self.pts_offset)
+                                        if self.last_out_audio_pts is not None and out_dts <= self.last_out_audio_pts:
+                                            out_dts = out_pts
                                         out[p_pos+5:p_pos+10] = encode_ts_timestamp(out_dts, 1)
 
         return bytes(out)
@@ -654,6 +663,8 @@ class StreamHub:
                     log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
                     time.sleep(1)
                     if not self.switching and not self.in_standby:
+                        with self.lock:
+                            self.restamper.start_new_channel()
                         self._start_initial()
                 else:
                     time.sleep(0.05)
@@ -669,16 +680,17 @@ class StreamHub:
                     # Se o processo ativo mudou enquanto lemos, ignora dados do processo antigo
                     if p != self.proc:
                         continue
+                    if self.slate_mode:
+                        print("[✓] Upstream recuperou — saindo do modo Slate.")
+                        log_event("SLATE_EXIT (upstream recovered)")
+                        self.restamper.start_new_channel()
+                        self.slate_mode = False
+                        self.stream_health = "ok"
                     processed = self.restamper.process_chunk(chunk)
                     if processed:
                         self.total_bytes += len(processed)
                         self.last_chunk_time = time.time()
                         self.health_window.append((time.time(), len(processed)))
-                        if self.slate_mode:
-                            print("[✓] Upstream recuperou — saindo do modo Slate.")
-                            log_event("SLATE_EXIT (upstream recovered)")
-                            self.slate_mode = False
-                            self.stream_health = "ok"
                         self._broadcast(processed)
             else:
                 # Processo terminou e não estamos trocando de canal
@@ -688,6 +700,8 @@ class StreamHub:
                     log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
                     time.sleep(1)
                     if not self.switching and not self.in_standby:
+                        with self.lock:
+                            self.restamper.start_new_channel()
                         self._start_initial()
                 else:
                     time.sleep(0.01)
@@ -720,6 +734,8 @@ class StreamHub:
                 if self.slate_mode:
                     print("[✓] Upstream recuperou — saindo do modo Slate.")
                     log_event("SLATE_EXIT (upstream recovered)")
+                    with self.lock:
+                        self.restamper.start_new_channel()
                     self.slate_mode = False
                     self.stream_health = "ok"
                     slate_idx = 0
@@ -739,6 +755,8 @@ class StreamHub:
                 if not self.slate_mode:
                     print(f"[⚠] Gap de {gap:.1f}s detectado — entrando no modo Slate (Sem Sinal).")
                     log_event(f"SLATE_ENTER gap={gap:.1f}s")
+                    with self.lock:
+                        self.restamper.start_new_channel()
                     self.slate_mode = True
                     self.slate_start_time = time.time()
                     self.stream_health = "slate"

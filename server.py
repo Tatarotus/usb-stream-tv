@@ -375,33 +375,60 @@ class SeamlessRestamper:
 def resolve_youtube(yt_url):
     """
     Usa yt-dlp para extrair título, duração, thumbnail e URLs de stream (vídeo + áudio DASH).
+    Tenta primeiro conexão direta para máxima velocidade. Se a VPS for sinalizada como bot,
+    faz fallback transparente através do proxy residencial móvel SOCKS5 (Xiaomi Mi A2).
     Retorna dict com metadados estruturados ou levanta ValueError.
     """
     qjs_path = "/usr/bin/qjs"
-    cmd = [
+    base_cmd = [
         "yt-dlp",
         "--no-warnings",
         "--no-playlist",
     ]
     if os.path.exists(qjs_path):
-        cmd.extend(["--js-runtimes", f"quickjs:{qjs_path}"])
+        base_cmd.extend(["--js-runtimes", f"quickjs:{qjs_path}"])
     elif shutil.which("qjs"):
-        cmd.extend(["--js-runtimes", f"quickjs:{shutil.which('qjs')}"])
+        base_cmd.extend(["--js-runtimes", f"quickjs:{shutil.which('qjs')}"])
 
-    cmd.extend([
+    base_cmd.extend([
         "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
         "-J",
         yt_url
     ])
 
+    # 1. Tentativa Direta (rápida)
+    res = None
     try:
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=35)
-    except subprocess.TimeoutExpired:
-        raise ValueError("Tempo esgotado ao buscar informações do vídeo no YouTube (timeout 35s).")
+        res = subprocess.run(base_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+    except Exception:
+        pass
 
-    if res.returncode != 0:
-        err = res.stderr.strip()
-        err_short = err.split("\n")[-1] if err else f"Código de saída {res.returncode}"
+    # 2. Se falhar ou for bloqueado por detecção de bot de datacenter, tenta via proxy residencial
+    need_proxy = False
+    used_proxy = False
+    if not res or res.returncode != 0:
+        need_proxy = True
+    elif res.returncode == 0:
+        try:
+            test_data = json.loads(res.stdout)
+            if not test_data.get("url") and not test_data.get("requested_formats"):
+                need_proxy = True
+        except Exception:
+            need_proxy = True
+
+    if need_proxy and RESIDENTIAL_SOCKS_PROXY:
+        print("[*] yt-dlp usando proxy residencial de contingência...")
+        used_proxy = True
+        proxy_clean = RESIDENTIAL_SOCKS_PROXY.replace("socks5h://", "socks5://")
+        proxy_cmd = [base_cmd[0], "--proxy", proxy_clean] + base_cmd[1:]
+        try:
+            res = subprocess.run(proxy_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=35)
+        except subprocess.TimeoutExpired:
+            raise ValueError("Tempo esgotado ao buscar informações do vídeo no YouTube (timeout 35s).")
+
+    if not res or res.returncode != 0:
+        err = res.stderr.strip() if res else "Erro desconhecido"
+        err_short = err.split("\n")[-1] if err else f"Código de saída {res.returncode if res else 'None'}"
         raise ValueError(f"yt-dlp: {err_short}")
 
     try:
@@ -438,10 +465,11 @@ def resolve_youtube(yt_url):
         "thumbnail": thumbnail,
         "video_url": video_url,
         "audio_url": audio_url,
-        "original_url": yt_url
+        "original_url": yt_url,
+        "use_proxy": used_proxy
     }
 
-def build_ffmpeg_cmd(url, audio_url=None, is_live=False):
+def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False):
     is_http = url.startswith("http://") or url.startswith("https://")
     url_lower = url.lower()
     is_vod = any(x in url_lower for x in [
@@ -457,9 +485,6 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False):
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning"
     ]
 
-    # Pacing -re APENAS para arquivos estáticos (VOD ou arquivo local).
-    # Em streams ao vivo (HLS/IPTV ou YouTube Live), -re NÃO deve ser usado pois atrasa a leitura
-    # dos chunks da rede e causa engasgos/desync com o buffer do broadcaster.
     use_re = (not is_http or is_vod) and not is_live
 
     # Input 0: Vídeo principal (ou vídeo+áudio progressivo)
@@ -470,8 +495,8 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False):
         ua = "Mozilla/5.0" if ("studut.shop" in url or "m3u8" in url or "googlevideo" in url_lower) else "IPTVSmartersPro"
         cmd.extend(["-user_agent", ua])
 
-        # Proxy residencial apenas para CDN de IPTV que bloqueia datacenter
-        if is_vod and RESIDENTIAL_HTTP_PROXY and "googlevideo" not in url_lower:
+        # Proxy residencial para IPTV ou se o YouTube exigiu proxy
+        if (use_proxy or (is_vod and "googlevideo" not in url_lower)) and RESIDENTIAL_HTTP_PROXY:
             cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
 
         if ".mp4" in url_lower or ".mkv" in url_lower or "googlevideo" in url_lower:
@@ -505,9 +530,11 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False):
             "-reconnect", "1",
             "-reconnect_delay_max", "3",
             "-probesize", "1000000",
-            "-analyzeduration", "2000000",
-            "-i", audio_url
+            "-analyzeduration", "2000000"
         ])
+        if (use_proxy or (is_vod and "googlevideo" not in url_lower)) and RESIDENTIAL_HTTP_PROXY:
+            cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
+        cmd.extend(["-i", audio_url])
 
     if STREAM_RESOLUTION == "1080p":
         vf = "scale=1920:1080:force_original_aspect_ratio=decrease:flags=bicubic,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
@@ -625,7 +652,12 @@ class StreamHub:
         self.keepalive_thread.start()
 
     def _start_initial(self):
-        cmd = build_ffmpeg_cmd(self.current_url, audio_url=self.current_audio_url, is_live=self.current_is_live)
+        cmd = build_ffmpeg_cmd(
+            self.current_url, 
+            audio_url=self.current_audio_url, 
+            is_live=self.current_is_live,
+            use_proxy=getattr(self, "current_use_proxy", False)
+        )
         print(f"[*] Hub iniciando canal inicial: {self.current_channel_name} ({self.current_url})")
         log_event(f"FFMPEG_START {self.current_channel_id}")
         try:
@@ -760,12 +792,19 @@ class StreamHub:
                     rc = p.poll()
                     if self.current_is_temporary:
                         fallback_ch = self.fallback_channel or "globo-morena-dourados"
+                        ch = CH_MGR.get_channel(fallback_ch)
                         print(f"[✓] Transmissão temporária finalizada ({self.current_channel_name}, rc={rc}). Retornando à TV ao vivo ({fallback_ch})...")
                         log_event(f"TEMPORARY_STREAM_ENDED {self.current_channel_id} -> fallback to {fallback_ch}")
                         self.current_is_temporary = False
                         self.fallback_channel = None
                         self.youtube_meta = None
-                        self.switch_channel(channel_id=fallback_ch)
+                        if ch:
+                            self.current_channel_id = ch["id"]
+                            self.current_channel_name = ch["name"]
+                            self.current_url = ch["url"]
+                            self.current_audio_url = None
+                            self.current_is_live = False
+                        self.switch_channel(channel_id=fallback_ch, force=True)
                     else:
                         print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
                         log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
@@ -806,12 +845,19 @@ class StreamHub:
                     rc = p.poll()
                     if self.current_is_temporary:
                         fallback_ch = self.fallback_channel or "globo-morena-dourados"
+                        ch = CH_MGR.get_channel(fallback_ch)
                         print(f"[✓] Transmissão temporária finalizada ({self.current_channel_name}, rc={rc}). Retornando à TV ao vivo ({fallback_ch})...")
                         log_event(f"TEMPORARY_STREAM_ENDED {self.current_channel_id} -> fallback to {fallback_ch}")
                         self.current_is_temporary = False
                         self.fallback_channel = None
                         self.youtube_meta = None
-                        self.switch_channel(channel_id=fallback_ch)
+                        if ch:
+                            self.current_channel_id = ch["id"]
+                            self.current_channel_name = ch["name"]
+                            self.current_url = ch["url"]
+                            self.current_audio_url = None
+                            self.current_is_live = False
+                        self.switch_channel(channel_id=fallback_ch, force=True)
                     else:
                         print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
                         log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
@@ -897,7 +943,7 @@ class StreamHub:
                 with self.lock:
                     self._broadcast(null_burst)
 
-    def switch_channel(self, channel_id=None, custom_url=None, custom_name=None):
+    def switch_channel(self, channel_id=None, custom_url=None, custom_name=None, force=False):
         if not self.switch_lock.acquire(blocking=True, timeout=4.0):
             print("[~] Troca de canal anterior ainda em andamento. Aguarde...")
             return False
@@ -919,7 +965,7 @@ class StreamHub:
                 else:
                     return
 
-                if target_id == self.current_channel_id:
+                if not force and target_id == self.current_channel_id:
                     print(f"[~] Já sintonizado em: {target_name}")
                     return
 
@@ -937,7 +983,7 @@ class StreamHub:
                     print(f"[!] Erro ao iniciar processo para {target_name}: {e}")
                     return
 
-                # Aguarda os primeiros bytes válidos do novo canal (timeout 8s)
+                # Aguarda os primeiros bytes válidos do novo canal (timeout 22s)
                 # O canal anterior CONTINUA TRANSMITINDO durante este tempo!
                 first_chunk = []
                 def read_first():
@@ -950,8 +996,7 @@ class StreamHub:
 
                 t = threading.Thread(target=read_first, daemon=True)
                 t.start()
-                t.join(timeout=10.0)
-
+                t.join(timeout=22.0)
 
                 if not first_chunk or len(first_chunk[0]) == 0:
                     print(f"[!] Timeout ao conectar em {target_name}. Mantendo canal {self.current_channel_name} sem queda.")
@@ -972,6 +1017,7 @@ class StreamHub:
                     self.current_audio_url = None
                     self.current_is_live = False
                     self.current_is_temporary = False
+                    self.current_use_proxy = False
                     self.fallback_channel = None
                     self.youtube_meta = None
 
@@ -1020,12 +1066,13 @@ class StreamHub:
                 target_url = meta["video_url"]
                 audio_url = meta.get("audio_url")
                 is_live = meta.get("is_live", False)
+                use_proxy = meta.get("use_proxy", False)
                 return_channel = self.current_channel_id if not self.current_is_temporary else (self.fallback_channel or "globo-morena-dourados")
 
-                print(f"\n[▶️] INICIANDO TRANSMISSÃO DO YOUTUBE: {target_name}")
+                print(f"\n[▶️] INICIANDO TRANSMISSÃO DO YOUTUBE: {target_name} (via_proxy={use_proxy})")
                 log_event(f"YOUTUBE_START {target_id} ({meta['title']})")
 
-                cmd = build_ffmpeg_cmd(target_url, audio_url=audio_url, is_live=is_live)
+                cmd = build_ffmpeg_cmd(target_url, audio_url=audio_url, is_live=is_live, use_proxy=use_proxy)
                 try:
                     new_p = subprocess.Popen(
                         cmd,
@@ -1037,7 +1084,7 @@ class StreamHub:
                     print(f"[!] Erro ao iniciar processo para {target_name}: {e}")
                     return
 
-                # Aguarda os primeiros bytes válidos (timeout 14s para YouTube DASH)
+                # Aguarda os primeiros bytes válidos (timeout 22s para YouTube DASH)
                 first_chunk = []
                 def read_first():
                     try:
@@ -1049,7 +1096,7 @@ class StreamHub:
 
                 t = threading.Thread(target=read_first, daemon=True)
                 t.start()
-                t.join(timeout=14.0)
+                t.join(timeout=22.0)
 
                 if not first_chunk or len(first_chunk[0]) == 0:
                     print(f"[!] Timeout ao conectar no YouTube: {target_name}. Mantendo canal anterior {self.current_channel_name}.")
@@ -1070,6 +1117,7 @@ class StreamHub:
                     self.current_audio_url = audio_url
                     self.current_is_live = is_live
                     self.current_is_temporary = not is_live
+                    self.current_use_proxy = use_proxy
                     self.fallback_channel = return_channel
                     self.youtube_meta = {
                         "title": meta["title"],

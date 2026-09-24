@@ -81,14 +81,7 @@ sleep 2
 
 # 6. Soft-reset no USB Gadget para a TV detectar o novo arquivo
 echo "[*] Reiniciando barramento USB para varredura da TV..."
-if [ -d "/sys/class/android_usb/android0" ]; then
-    # Tablet SM-T110 (sysfs legado)
-    echo 0 > /sys/class/android_usb/android0/enable 2>/dev/null || true
-    sleep 1
-    echo 1 > /sys/class/android_usb/android0/f_mass_storage/lun0/ro 2>/dev/null || true
-    echo "$BACKING_IMG" > /sys/class/android_usb/android0/f_mass_storage/lun0/file 2>/dev/null || true
-    echo 1 > /sys/class/android_usb/android0/enable 2>/dev/null || true
-elif [ -d "/config/usb_gadget/g1" ] || [ -d "/sys/kernel/config/usb_gadget/g1" ]; then
+if [ -d "/config/usb_gadget/g1" ] || [ -d "/sys/kernel/config/usb_gadget/g1" ]; then
     # Xiaomi Mi A2 (ConfigFS moderno)
     GADGET="/config/usb_gadget/g1"
     [ ! -d "$GADGET" ] && GADGET="/sys/kernel/config/usb_gadget/g1"
@@ -97,7 +90,18 @@ elif [ -d "/config/usb_gadget/g1" ] || [ -d "/sys/kernel/config/usb_gadget/g1" ]
     sleep 1
     echo 1 > "$GADGET/functions/mass_storage.0/lun.0/ro" 2>/dev/null || true
     echo "$BACKING_IMG" > "$GADGET/functions/mass_storage.0/lun.0/file" 2>/dev/null || true
+    rm -f "$GADGET/configs/b.1/f1" "$GADGET/configs/b.1/f2" 2>/dev/null || true
+    ln -s "$GADGET/functions/mass_storage.0" "$GADGET/configs/b.1/f1" 2>/dev/null || true
+    [ -d "$GADGET/functions/ffs.adb" ] && ln -s "$GADGET/functions/ffs.adb" "$GADGET/configs/b.1/f2" 2>/dev/null || true
+    echo 500000 > /sys/class/power_supply/usb/current_max 2>/dev/null || true
     echo "$UDC" > "$GADGET/UDC" 2>/dev/null || true
+elif [ -d "/sys/class/android_usb/android0/f_mass_storage" ]; then
+    # Tablet SM-T110 (sysfs legado)
+    echo 0 > /sys/class/android_usb/android0/enable 2>/dev/null || true
+    sleep 1
+    echo 1 > /sys/class/android_usb/android0/f_mass_storage/lun0/ro 2>/dev/null || true
+    echo "$BACKING_IMG" > /sys/class/android_usb/android0/f_mass_storage/lun0/file 2>/dev/null || true
+    echo 1 > /sys/class/android_usb/android0/enable 2>/dev/null || true
 fi
 
 echo "[✓] VOD Ativado na TV com Sucesso! TV já está executando varredura."

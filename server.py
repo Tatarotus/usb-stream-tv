@@ -421,6 +421,7 @@ def resolve_youtube(yt_url):
         base_cmd.extend(["--js-runtimes", f"quickjs:{shutil.which('qjs')}"])
 
     base_cmd.extend([
+        "--extractor-args", "youtube:player_client=android,web",
         "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
         "-J",
         yt_url
@@ -1263,31 +1264,47 @@ def _prepare_vod_thread(task_id, url, title):
 
     try:
         if is_yt:
-            with VOD_TASKS_LOCK:
-                task["progress"] = 10
-            meta = resolve_youtube(url)
-            clean_title = meta.get("title") or clean_title
-            duration = meta.get("duration") or 0
-
             raw_file = os.path.join(VOD_DIR, f"{task_id}_raw.mkv")
-            yt_cmd = [
-                "yt-dlp",
-                "--no-warnings",
-                "--no-playlist",
-                "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-                "--merge-output-format", "mkv",
-                "-o", raw_file
-            ]
-            if os.path.exists("/usr/bin/qjs"):
-                yt_cmd.extend(["--js-runtimes", "quickjs:/usr/bin/qjs"])
-            elif shutil.which("qjs"):
-                yt_cmd.extend(["--js-runtimes", f"quickjs:{shutil.which('qjs')}"])
-            if RESIDENTIAL_SOCKS_PROXY:
-                proxy_clean = RESIDENTIAL_SOCKS_PROXY.replace("socks5h://", "socks5://")
-                yt_cmd.extend(["--proxy", proxy_clean])
-            yt_cmd.append(url)
+            if os.path.exists(raw_file) and os.path.getsize(raw_file) > 1000000:
+                print(f"[VOD] Arquivo raw já existente ({os.path.getsize(raw_file) / (1024*1024):.1f} MB), iniciando conversão...")
+                with VOD_TASKS_LOCK:
+                    task["progress"] = 50
+                try:
+                    probe_out = subprocess.check_output([
+                        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1", raw_file
+                    ], text=True).strip()
+                    duration = float(probe_out)
+                except Exception:
+                    duration = 600
+            else:
+                with VOD_TASKS_LOCK:
+                    task["progress"] = 10
+                try:
+                    meta = resolve_youtube(url)
+                    clean_title = meta.get("title") or clean_title
+                    duration = meta.get("duration") or 0
+                except Exception as e:
+                    print(f"[*] resolve_youtube informativo falhou: {e}, prosseguindo para download direto...")
 
-            if not (os.path.exists(raw_file) and os.path.getsize(raw_file) > 1000000):
+                yt_cmd = [
+                    "yt-dlp",
+                    "--no-warnings",
+                    "--no-playlist",
+                    "--extractor-args", "youtube:player_client=android,web",
+                    "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                    "--merge-output-format", "mkv",
+                    "-o", raw_file
+                ]
+                if os.path.exists("/usr/bin/qjs"):
+                    yt_cmd.extend(["--js-runtimes", "quickjs:/usr/bin/qjs"])
+                elif shutil.which("qjs"):
+                    yt_cmd.extend(["--js-runtimes", f"quickjs:{shutil.which('qjs')}"])
+                if RESIDENTIAL_SOCKS_PROXY:
+                    proxy_clean = RESIDENTIAL_SOCKS_PROXY.replace("socks5h://", "socks5://")
+                    yt_cmd.extend(["--proxy", proxy_clean])
+                yt_cmd.append(url)
+
                 print(f"[VOD] Baixando YouTube '{clean_title}'...")
                 proc_yt = subprocess.Popen(yt_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 pct_pat = re.compile(r"(\d+\.\d+)%")
@@ -1301,10 +1318,6 @@ def _prepare_vod_thread(task_id, url, title):
                 proc_yt.wait()
                 if proc_yt.returncode != 0:
                     raise RuntimeError(f"yt-dlp falhou com código {proc_yt.returncode}")
-            else:
-                print(f"[VOD] Arquivo raw já existente ({os.path.getsize(raw_file) / (1024*1024):.1f} MB), iniciando conversão...")
-                with VOD_TASKS_LOCK:
-                    task["progress"] = 50
 
             # Transcode raw media with FFmpeg into 100% Samsung-compatible H.264 + AC3 stereo
             cmd = [

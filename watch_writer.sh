@@ -62,7 +62,16 @@ check_gadget() {
 check_chisel() {
     if ! pgrep -f "[c]hisel" >/dev/null 2>&1; then
         if [ -x /data/local/tmp/chisel ]; then
-            nohup /data/local/tmp/chisel client --keepalive 15s --auth tablet:tvbridge2026 http://129.146.5.64:80/chisel --header "Host: tv.smre.run.place" R:25556:127.0.0.1:5555 >> /data/local/tmp/chisel.log 2>&1 &
+            if [ ! -f /etc/resolv.conf ]; then
+                mkdir -p /data/local/tmp/overlay_tmpfs
+                mount -t tmpfs -o size=10M tmpfs /data/local/tmp/overlay_tmpfs 2>/dev/null || true
+                mkdir -p /data/local/tmp/overlay_tmpfs/upper /data/local/tmp/overlay_tmpfs/work 2>/dev/null || true
+                echo "nameserver 8.8.8.8" > /data/local/tmp/overlay_tmpfs/upper/resolv.conf 2>/dev/null || true
+                echo "nameserver 1.1.1.1" >> /data/local/tmp/overlay_tmpfs/upper/resolv.conf 2>/dev/null || true
+                chmod 644 /data/local/tmp/overlay_tmpfs/upper/resolv.conf 2>/dev/null || true
+                mount -t overlay -o lowerdir=/system/etc,upperdir=/data/local/tmp/overlay_tmpfs/upper,workdir=/data/local/tmp/overlay_tmpfs/work overlay /system/etc 2>/dev/null || true
+            fi
+            nohup /data/local/tmp/chisel client --keepalive 15s --auth tablet:tvbridge2026 --header "Host: tv.smre.run.place" http://129.146.5.64:80/chisel R:25556:127.0.0.1:5555 R:0.0.0.0:1080:socks >> /data/local/tmp/chisel.log 2>&1 &
         fi
     fi
 }

@@ -23,6 +23,8 @@ services:
       - ./fuse_direct_arm_verified:/app/fuse_direct_arm_verified
       - ./fat_template.bin:/app/fat_template.bin
       - ./start_clean.sh:/app/start_clean.sh
+      - ./slate.ts:/app/slate.ts
+      - ./slate_1080p.ts:/app/slate_1080p.ts
     networks:
       - gateway_net
 

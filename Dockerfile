@@ -6,7 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     fonts-dejavu-core \
-    && rm -rf /var/lib/apt/lists/*
+    quickjs \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir yt-dlp
 
 WORKDIR /app
 

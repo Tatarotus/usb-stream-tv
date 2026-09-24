@@ -17,6 +17,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 import json
 import re
+import hashlib
+import shutil
 
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", 8080))
@@ -370,32 +372,109 @@ class SeamlessRestamper:
 
         return bytes(out)
 
-def build_ffmpeg_cmd(url):
+def resolve_youtube(yt_url):
+    """
+    Usa yt-dlp para extrair título, duração, thumbnail e URLs de stream (vídeo + áudio DASH).
+    Retorna dict com metadados estruturados ou levanta ValueError.
+    """
+    qjs_path = "/usr/bin/qjs"
+    cmd = [
+        "yt-dlp",
+        "--no-warnings",
+        "--no-playlist",
+    ]
+    if os.path.exists(qjs_path):
+        cmd.extend(["--js-runtimes", f"quickjs:{qjs_path}"])
+    elif shutil.which("qjs"):
+        cmd.extend(["--js-runtimes", f"quickjs:{shutil.which('qjs')}"])
+
+    cmd.extend([
+        "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+        "-J",
+        yt_url
+    ])
+
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=35)
+    except subprocess.TimeoutExpired:
+        raise ValueError("Tempo esgotado ao buscar informações do vídeo no YouTube (timeout 35s).")
+
+    if res.returncode != 0:
+        err = res.stderr.strip()
+        err_short = err.split("\n")[-1] if err else f"Código de saída {res.returncode}"
+        raise ValueError(f"yt-dlp: {err_short}")
+
+    try:
+        data = json.loads(res.stdout)
+    except Exception as e:
+        raise ValueError(f"Erro ao decodificar metadados do YouTube: {e}")
+
+    title = data.get("title", "Vídeo do YouTube")
+    duration = data.get("duration")
+    is_live = bool(data.get("is_live", False))
+    thumbnail = data.get("thumbnail", "")
+
+    video_url = None
+    audio_url = None
+
+    req_formats = data.get("requested_formats") or []
+    if req_formats:
+        for f in req_formats:
+            if f.get("vcodec") != "none" and not video_url:
+                video_url = f.get("url")
+            elif f.get("acodec") != "none" and not audio_url:
+                audio_url = f.get("url")
+
+    if not video_url:
+        video_url = data.get("url")
+
+    if not video_url:
+        raise ValueError("Não foi possível extrair URL do fluxo de vídeo do YouTube.")
+
+    return {
+        "title": title,
+        "duration": duration,
+        "is_live": is_live,
+        "thumbnail": thumbnail,
+        "video_url": video_url,
+        "audio_url": audio_url,
+        "original_url": yt_url
+    }
+
+def build_ffmpeg_cmd(url, audio_url=None, is_live=False):
     is_http = url.startswith("http://") or url.startswith("https://")
     url_lower = url.lower()
     is_vod = any(x in url_lower for x in [
         "fontedecanais", "/movie/", "/series/", "movies/", "series/",
-        ".mp4", ".mkv", "youtube.com", "googlevideo.com"
+        ".mp4", ".mkv", "googlevideo.com"
     ])
+    if is_live:
+        is_vod = False
+    elif audio_url or "googlevideo.com" in url_lower:
+        is_vod = True
 
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning"
     ]
 
     # Pacing -re APENAS para arquivos estáticos (VOD ou arquivo local).
-    # Em streams ao vivo (HLS/IPTV), -re NÃO deve ser usado pois atrasa a leitura
+    # Em streams ao vivo (HLS/IPTV ou YouTube Live), -re NÃO deve ser usado pois atrasa a leitura
     # dos chunks da rede e causa engasgos/desync com o buffer do broadcaster.
-    if not is_http or is_vod:
+    use_re = (not is_http or is_vod) and not is_live
+
+    # Input 0: Vídeo principal (ou vídeo+áudio progressivo)
+    if use_re:
         cmd.append("-re")
 
     if is_http:
-        ua = "Mozilla/5.0" if ("studut.shop" in url or "m3u8" in url) else "IPTVSmartersPro"
+        ua = "Mozilla/5.0" if ("studut.shop" in url or "m3u8" in url or "googlevideo" in url_lower) else "IPTVSmartersPro"
         cmd.extend(["-user_agent", ua])
 
-        if is_vod and RESIDENTIAL_HTTP_PROXY:
+        # Proxy residencial apenas para CDN de IPTV que bloqueia datacenter
+        if is_vod and RESIDENTIAL_HTTP_PROXY and "googlevideo" not in url_lower:
             cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
 
-        if ".mp4" in url_lower or ".mkv" in url_lower:
+        if ".mp4" in url_lower or ".mkv" in url_lower or "googlevideo" in url_lower:
             cmd.extend([
                 "-reconnect", "1",
                 "-reconnect_delay_max", "3"
@@ -411,6 +490,24 @@ def build_ffmpeg_cmd(url):
         # Loop local video files infinitely so tests never exhaust the source
         cmd.extend(["-stream_loop", "-1"])
 
+    cmd.extend([
+        "-probesize", "1000000",
+        "-analyzeduration", "2000000",
+        "-i", url
+    ])
+
+    # Input 1: Áudio DASH separado (YouTube 1080p)
+    if audio_url:
+        if use_re:
+            cmd.append("-re")
+        cmd.extend([
+            "-user_agent", "Mozilla/5.0",
+            "-reconnect", "1",
+            "-reconnect_delay_max", "3",
+            "-probesize", "1000000",
+            "-analyzeduration", "2000000",
+            "-i", audio_url
+        ])
 
     if STREAM_RESOLUTION == "1080p":
         vf = "scale=1920:1080:force_original_aspect_ratio=decrease:flags=bicubic,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
@@ -424,11 +521,8 @@ def build_ffmpeg_cmd(url):
         bufsize = "4400k"
 
     cmd.extend([
-        "-probesize", "1000000",
-        "-analyzeduration", "2000000",
-        "-i", url,
         "-map", "0:v:0",
-        "-map", "0:a:0?",
+        "-map", "1:a:0" if audio_url else "0:a:0?",
         # Normalização visual: 1080p ou 720p 30fps para Samsung Plasma PL51F4000
         "-vf", vf,
         "-r", "30",
@@ -486,6 +580,11 @@ class StreamHub:
         self.current_channel_id = initial_ch.get("id", "globo-morena-dourados")
         self.current_channel_name = initial_ch.get("name", "Rede Globo (TV Morena)")
         self.current_url = initial_ch.get("url", "")
+        self.current_audio_url = None
+        self.current_is_live = False
+        self.current_is_temporary = False
+        self.fallback_channel = None
+        self.youtube_meta = None
         
         self.subscribers = set()
         self.proc = None
@@ -526,7 +625,7 @@ class StreamHub:
         self.keepalive_thread.start()
 
     def _start_initial(self):
-        cmd = build_ffmpeg_cmd(self.current_url)
+        cmd = build_ffmpeg_cmd(self.current_url, audio_url=self.current_audio_url, is_live=self.current_is_live)
         print(f"[*] Hub iniciando canal inicial: {self.current_channel_name} ({self.current_url})")
         log_event(f"FFMPEG_START {self.current_channel_id}")
         try:
@@ -659,13 +758,22 @@ class StreamHub:
             if p.poll() is not None:
                 if p == self.proc and not self.switching and not self.in_standby:
                     rc = p.poll()
-                    print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
-                    log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
-                    time.sleep(1)
-                    if not self.switching and not self.in_standby:
-                        with self.lock:
-                            self.restamper.start_new_channel()
-                        self._start_initial()
+                    if self.current_is_temporary:
+                        fallback_ch = self.fallback_channel or "globo-morena-dourados"
+                        print(f"[✓] Transmissão temporária finalizada ({self.current_channel_name}, rc={rc}). Retornando à TV ao vivo ({fallback_ch})...")
+                        log_event(f"TEMPORARY_STREAM_ENDED {self.current_channel_id} -> fallback to {fallback_ch}")
+                        self.current_is_temporary = False
+                        self.fallback_channel = None
+                        self.youtube_meta = None
+                        self.switch_channel(channel_id=fallback_ch)
+                    else:
+                        print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
+                        log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
+                        time.sleep(1)
+                        if not self.switching and not self.in_standby:
+                            with self.lock:
+                                self.restamper.start_new_channel()
+                            self._start_initial()
                 else:
                     time.sleep(0.05)
                 continue
@@ -696,13 +804,22 @@ class StreamHub:
                 # Processo terminou e não estamos trocando de canal
                 if p.poll() is not None and p == self.proc and not self.switching and not self.in_standby:
                     rc = p.poll()
-                    print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
-                    log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
-                    time.sleep(1)
-                    if not self.switching and not self.in_standby:
-                        with self.lock:
-                            self.restamper.start_new_channel()
-                        self._start_initial()
+                    if self.current_is_temporary:
+                        fallback_ch = self.fallback_channel or "globo-morena-dourados"
+                        print(f"[✓] Transmissão temporária finalizada ({self.current_channel_name}, rc={rc}). Retornando à TV ao vivo ({fallback_ch})...")
+                        log_event(f"TEMPORARY_STREAM_ENDED {self.current_channel_id} -> fallback to {fallback_ch}")
+                        self.current_is_temporary = False
+                        self.fallback_channel = None
+                        self.youtube_meta = None
+                        self.switch_channel(channel_id=fallback_ch)
+                    else:
+                        print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
+                        log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
+                        time.sleep(1)
+                        if not self.switching and not self.in_standby:
+                            with self.lock:
+                                self.restamper.start_new_channel()
+                            self._start_initial()
                 else:
                     time.sleep(0.01)
 
@@ -852,6 +969,11 @@ class StreamHub:
                     self.current_channel_id = target_id
                     self.current_channel_name = target_name
                     self.current_url = target_url
+                    self.current_audio_url = None
+                    self.current_is_live = False
+                    self.current_is_temporary = False
+                    self.fallback_channel = None
+                    self.youtube_meta = None
 
                     # Avança timestamps e continuity counters de forma estritamente contínua
                     self.restamper.start_new_channel()
@@ -879,6 +1001,109 @@ class StreamHub:
         threading.Thread(target=_do_switch, daemon=True).start()
         return True
 
+    def switch_youtube(self, meta):
+        """
+        Sintoniza vídeo ou live do YouTube de forma Make-Before-Break.
+        Suporta dual-stream DASH (vídeo 1080p + áudio separado).
+        Ao final de vídeos normais (VOD), retorna automaticamente ao canal de TV padrão.
+        """
+        if not self.switch_lock.acquire(blocking=True, timeout=4.0):
+            print("[~] Troca de transmissão anterior ainda em andamento. Aguarde...")
+            return False
+
+        def _do_switch():
+            try:
+                self.switching = True
+                yt_id = hashlib.md5(meta['original_url'].encode()).hexdigest()[:8]
+                target_id = f"youtube_{yt_id}"
+                target_name = f"YouTube: {meta['title']}"
+                target_url = meta["video_url"]
+                audio_url = meta.get("audio_url")
+                is_live = meta.get("is_live", False)
+                return_channel = self.current_channel_id if not self.current_is_temporary else (self.fallback_channel or "globo-morena-dourados")
+
+                print(f"\n[▶️] INICIANDO TRANSMISSÃO DO YOUTUBE: {target_name}")
+                log_event(f"YOUTUBE_START {target_id} ({meta['title']})")
+
+                cmd = build_ffmpeg_cmd(target_url, audio_url=audio_url, is_live=is_live)
+                try:
+                    new_p = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        bufsize=1048576
+                    )
+                except Exception as e:
+                    print(f"[!] Erro ao iniciar processo para {target_name}: {e}")
+                    return
+
+                # Aguarda os primeiros bytes válidos (timeout 14s para YouTube DASH)
+                first_chunk = []
+                def read_first():
+                    try:
+                        c = os.read(new_p.stdout.fileno(), 65424)
+                        if c:
+                            first_chunk.append(c)
+                    except Exception:
+                        pass
+
+                t = threading.Thread(target=read_first, daemon=True)
+                t.start()
+                t.join(timeout=14.0)
+
+                if not first_chunk or len(first_chunk[0]) == 0:
+                    print(f"[!] Timeout ao conectar no YouTube: {target_name}. Mantendo canal anterior {self.current_channel_name}.")
+                    log_event(f"YOUTUBE_TIMEOUT {target_id} (kept {self.current_channel_id})")
+                    try:
+                        new_p.kill()
+                    except Exception:
+                        pass
+                    return
+
+                # Chaveamento atômico instantâneo na TV!
+                with self.lock:
+                    old_p = self.proc
+                    self.proc = new_p
+                    self.current_channel_id = target_id
+                    self.current_channel_name = target_name
+                    self.current_url = target_url
+                    self.current_audio_url = audio_url
+                    self.current_is_live = is_live
+                    self.current_is_temporary = not is_live
+                    self.fallback_channel = return_channel
+                    self.youtube_meta = {
+                        "title": meta["title"],
+                        "duration": meta.get("duration"),
+                        "thumbnail": meta.get("thumbnail"),
+                        "original_url": meta["original_url"],
+                        "started_at": int(time.time()),
+                        "is_live": is_live
+                    }
+
+                    # Reinicia restamper de forma suave e contínua
+                    self.restamper.start_new_channel()
+
+                    processed = self.restamper.process_chunk(first_chunk[0])
+                    if processed:
+                        self.total_bytes += len(processed)
+                        self.last_chunk_time = time.time()
+                        self._broadcast(processed)
+
+                    if old_p:
+                        try:
+                            old_p.kill()
+                        except Exception:
+                            pass
+
+                print(f"[✓] YOUTUBE TRANSMITINDO NA TV COM SUCESSO! Novo conteúdo: {target_name}")
+                log_event(f"YOUTUBE_OK {target_id}")
+            finally:
+                self.switching = False
+                self.switch_lock.release()
+
+        threading.Thread(target=_do_switch, daemon=True).start()
+        return True
+
 HUB = StreamHub()
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -891,6 +1116,13 @@ class RequestHandler(BaseHTTPRequestHandler):
         if "/api/status" in msg or "/api/logo" in msg:
             return
         sys.stderr.write(f"[{time.strftime('%H:%M:%S')}] {self.client_address[0]} - {msg}\n")
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Auth-PIN")
+        self.end_headers()
 
     def do_HEAD(self):
         self.do_GET()
@@ -964,6 +1196,8 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/switch":
             self.handle_switch()
+        elif path == "/api/youtube":
+            self.handle_youtube()
         elif path in ("/player_api.php", "/xmltv.php"):
             self.proxy_player_api("POST")
         elif path == "/api/sync":
@@ -1052,6 +1286,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             "stream_bitrate_kbps": round(HUB.get_current_bitrate_kbps(), 1),
             "slate_mode": HUB.slate_mode,
             "slate_active_secs": round(time.time() - HUB.slate_start_time, 1) if HUB.slate_mode else 0,
+            "youtube": HUB.youtube_meta,
+            "is_temporary": HUB.current_is_temporary,
             "client": client_data
         }
         res = json.dumps(data).encode("utf-8")
@@ -1306,12 +1542,87 @@ class RequestHandler(BaseHTTPRequestHandler):
         custom_url = params.get("url")
         custom_name = params.get("name")
 
+        if custom_url and any(x in custom_url.lower() for x in ["youtube.com", "youtu.be"]):
+            try:
+                meta = resolve_youtube(custom_url)
+                ok = HUB.switch_youtube(meta)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "success": ok,
+                    "channel": f"YouTube: {meta['title']}",
+                    "title": meta["title"],
+                    "duration": meta.get("duration"),
+                    "thumbnail": meta.get("thumbnail")
+                }).encode("utf-8"))
+                return
+            except Exception as e:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "error": f"Erro YouTube: {str(e)}"}).encode("utf-8"))
+                return
+
         ok = HUB.switch_channel(channel_id=ch_id, custom_url=custom_url, custom_name=custom_name)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(json.dumps({"success": ok, "channel": HUB.current_channel_name}).encode("utf-8"))
+
+    def handle_youtube(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8")
+        try:
+            params = json.loads(body)
+        except Exception:
+            params = urllib.parse.parse_qs(body)
+            params = {k: v[0] for k, v in params.items()}
+
+        # Validação do PIN de Segurança (1233)
+        req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
+        if AUTH_PIN and req_pin != AUTH_PIN:
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": "PIN incorreto"}).encode("utf-8"))
+            return
+
+        yt_url = (params.get("url") or "").strip()
+        if not yt_url:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": "URL do YouTube não fornecida"}).encode("utf-8"))
+            return
+
+        try:
+            meta = resolve_youtube(yt_url)
+        except Exception as e:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+            return
+
+        ok = HUB.switch_youtube(meta)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps({
+            "success": ok,
+            "channel": f"YouTube: {meta['title']}",
+            "title": meta["title"],
+            "duration": meta.get("duration"),
+            "thumbnail": meta.get("thumbnail")
+        }).encode("utf-8"))
 
     def handle_sync(self):
         """Executa sincronização dos canais em segundo plano."""
@@ -1809,6 +2120,49 @@ class RequestHandler(BaseHTTPRequestHandler):
             font-size: 13px;
             cursor: pointer;
         }}
+        /* YouTube Card */
+        .youtube-card {{
+            background: linear-gradient(135deg, #18141e 0%, #0d111d 100%);
+            border: 1px solid rgba(239, 68, 68, 0.35);
+            border-radius: var(--card-radius);
+            padding: 14px 16px;
+            margin: 14px 0;
+            box-shadow: 0 4px 20px rgba(239, 68, 68, 0.12);
+        }}
+        .youtube-header {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .btn-play-yt {{
+            background: #e50914;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 16px;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+        }}
+        .btn-play-yt:active {{
+            background: #b80710;
+        }}
+        .spinner {{
+            display: inline-block;
+            width: 13px;
+            height: 13px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 0.8s linear infinite;
+        }}
+        @keyframes spin {{
+            to {{ transform: rotate(360deg); }}
+        }}
         /* Toast */
         .toast {{
             position: fixed;
@@ -1854,6 +2208,33 @@ class RequestHandler(BaseHTTPRequestHandler):
                 <div id="traffic-text" style="font-weight: 700; color: #fff;">0 MB</div>
                 <div style="font-size: 10px;">Enviado VPS</div>
                 <div id="client-lead-badge" style="font-size: 10px; color: #38bdf8; margin-top: 4px; display: none;"></div>
+            </div>
+        </div>
+
+        <!-- YouTube Cast Card -->
+        <div class="youtube-card">
+            <div class="youtube-header">
+                <span style="font-size: 18px;">▶️</span>
+                <span style="font-weight: 700; color: #ef4444; font-size: 14px;">Transmitir YouTube na TV</span>
+            </div>
+            <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px; margin-bottom: 8px;">
+                Vídeos, Shorts ou Lives em 1080p. Ao finalizar, retorna automaticamente à TV ao vivo.
+            </div>
+            <div class="custom-input-group">
+                <input type="text" id="yt-url-input" placeholder="Cole link do YouTube (ex: https://youtu.be/...)" onkeydown="if(event.key==='Enter') castYouTube()">
+                <button class="btn-play-yt" id="btn-yt" onclick="castYouTube()">
+                    <span id="btn-yt-text">Transmitir</span>
+                    <span id="btn-yt-spin" class="spinner" style="display: none;"></span>
+                </button>
+            </div>
+            <div id="yt-active-box" style="display: none; margin-top: 10px; padding: 10px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px;">
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <img id="yt-thumb" style="width: 72px; height: 42px; border-radius: 4px; object-fit: cover; background: #000;" src="" />
+                    <div style="flex: 1; min-width: 0;">
+                        <div id="yt-title" style="font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #fff;"></div>
+                        <div id="yt-meta-info" style="font-size: 11px; color: var(--text-dim); margin-top: 2px;"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -2144,6 +2525,54 @@ class RequestHandler(BaseHTTPRequestHandler):
             }}
         }}
 
+        async function castYouTube() {{
+            const pin = getAuthPin();
+            if (!pin) return;
+            const input = document.getElementById('yt-url-input');
+            const url = input.value.trim();
+            if (!url) {{
+                showToast("Cole o link de um vídeo do YouTube.");
+                return;
+            }}
+            const btn = document.getElementById('btn-yt');
+            const btnText = document.getElementById('btn-yt-text');
+            const btnSpin = document.getElementById('btn-yt-spin');
+            btn.disabled = true;
+            btnText.innerText = "Processando...";
+            btnSpin.style.display = "inline-block";
+            showToast("Extraindo vídeo do YouTube...");
+
+            try {{
+                const res = await fetch('/api/youtube', {{
+                    method: 'POST',
+                    headers: {{ 
+                        'Content-Type': 'application/json',
+                        'X-Auth-PIN': pin
+                    }},
+                    body: JSON.stringify({{ url: url, pin: pin }})
+                }});
+                if (res.status === 401) {{
+                    localStorage.removeItem('tv_pin');
+                    showToast("PIN incorreto.");
+                    return;
+                }}
+                const data = await res.json();
+                if (data.success) {{
+                    showToast(`Transmitindo na TV: ${{data.title}}`);
+                    input.value = "";
+                    updateStatus();
+                }} else {{
+                    showToast(data.error || "Erro ao transmitir vídeo.");
+                }}
+            }} catch (e) {{
+                showToast("Erro ao conectar com o servidor.");
+            }} finally {{
+                btn.disabled = false;
+                btnText.innerText = "Transmitir";
+                btnSpin.style.display = "none";
+            }}
+        }}
+
         async function updateStatus() {{
             try {{
                 const res = await fetch('/api/status');
@@ -2176,6 +2605,32 @@ class RequestHandler(BaseHTTPRequestHandler):
                     tvPill.className = 'status-pill waiting';
                     tvText.innerText = 'Aguardando TV';
                     if (leadBadge) leadBadge.style.display = 'none';
+                }}
+
+                if (data.youtube) {{
+                    const yb = document.getElementById('yt-active-box');
+                    if (yb) {{
+                        yb.style.display = 'block';
+                        const thumb = document.getElementById('yt-thumb');
+                        if (thumb) {{
+                            if (data.youtube.thumbnail) {{
+                                thumb.src = data.youtube.thumbnail;
+                                thumb.style.display = 'block';
+                            }} else {{
+                                thumb.style.display = 'none';
+                            }}
+                        }}
+                        const yTitle = document.getElementById('yt-title');
+                        if (yTitle) yTitle.innerText = data.youtube.title || 'Vídeo';
+                        const yMeta = document.getElementById('yt-meta-info');
+                        if (yMeta) {{
+                            let durStr = data.youtube.is_live ? 'AO VIVO' : (data.youtube.duration ? `${{Math.floor(data.youtube.duration / 60)}}m${{data.youtube.duration % 60}}s` : '');
+                            yMeta.innerText = `YouTube • ${{durStr}} • Retorna à TV ao finalizar`;
+                        }}
+                    }}
+                }} else {{
+                    const yb = document.getElementById('yt-active-box');
+                    if (yb) yb.style.display = 'none';
                 }}
 
                 if (currentActiveId !== data.active_channel_id) {{

@@ -978,11 +978,35 @@ class RequestHandler(BaseHTTPRequestHandler):
     def proxy_player_api(self, method="GET"):
         parsed = urllib.parse.urlparse(self.path)
         query_str = parsed.query
-        cache_key = f"{method}:{parsed.path}:{query_str}"
         now = time.time()
 
-        # Cache para chamadas de lista (live streams / categories) por 120s
-        if method == "GET" and ("get_live" in query_str or "get_vod" in query_str or "get_series" in query_str):
+        body = None
+        headers = {
+            "User-Agent": self.headers.get("User-Agent", "IPTVSmarters/3.1.1"),
+            "Accept": "*/*",
+        }
+
+        if method == "POST":
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 0:
+                body = self.rfile.read(length)
+                headers["Content-Type"] = self.headers.get("Content-Type", "application/x-www-form-urlencoded")
+
+        # Determina action da query ou do body
+        query = urllib.parse.parse_qs(query_str)
+        action = query.get("action", [""])[0]
+        if not action and body:
+            try:
+                post_data = urllib.parse.parse_qs(body.decode("utf-8", "ignore"))
+                action = post_data.get("action", [""])[0]
+            except Exception:
+                pass
+
+        is_list_call = any(k in action for k in ["get_live", "get_vod", "get_series"]) or any(k in query_str for k in ["get_live", "get_vod", "get_series"])
+        cache_key = f"{parsed.path}:{query_str}:{body.decode('utf-8', 'ignore') if body else ''}"
+
+        # Cache para chamadas pesadas de lista (live streams / categories / series / vod) por 600s
+        if is_list_call:
             with XTREAM_CACHE_LOCK:
                 if cache_key in XTREAM_CACHE:
                     c_data, c_ctype, c_exp = XTREAM_CACHE[cache_key]
@@ -999,55 +1023,61 @@ class RequestHandler(BaseHTTPRequestHandler):
         if query_str:
             upstream_url += f"?{query_str}"
 
-        headers = {
-            "User-Agent": self.headers.get("User-Agent", "IPTVSmarters/3.1.1"),
-            "Accept": "*/*",
-        }
+        data = None
+        ctype = "application/json"
+        last_err = None
 
-        body = None
-        if method == "POST":
-            length = int(self.headers.get("Content-Length", 0))
-            if length > 0:
-                body = self.rfile.read(length)
-                headers["Content-Type"] = self.headers.get("Content-Type", "application/x-www-form-urlencoded")
+        # Tenta com retry automático e timeout alargado (45s para listas pesadas de 16MB)
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(upstream_url, data=body, headers=headers, method=method)
+                with urllib.request.urlopen(req, timeout=45) as resp:
+                    data = resp.read()
+                    ctype = resp.headers.get("Content-Type", "application/json")
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                print(f"[!] Tentativa {attempt + 1} falhou no proxy Xtream ({e})...")
+                time.sleep(1)
+
+        if data is None:
+            print(f"[!] Erro definitivo no proxy Xtream: {last_err}")
+            self.send_error(502, f"Upstream error: {last_err}")
+            return
 
         try:
-            req = urllib.request.Request(upstream_url, data=body, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = resp.read()
-                ctype = resp.headers.get("Content-Type", "application/json")
+            # Se for login/autenticação (sem action), reescreve a URL do server_info para a nossa VPS!
+            if not action and (b"server_info" in data):
+                try:
+                    js = json.loads(data.decode("utf-8", "ignore"))
+                    if "server_info" in js:
+                        host_header = self.headers.get("Host", "tv.smre.run.place")
+                        host_name = host_header.split(":")[0]
+                        proto = self.headers.get("X-Forwarded-Proto") or ("https" if "443" in host_header else "http")
+                        port = "443" if proto == "https" else "80"
 
-                # Se for login/autenticação (sem action), reescreve a URL do server_info para a nossa VPS!
-                query = urllib.parse.parse_qs(query_str)
-                action = query.get("action", [""])[0]
-                if not action and (b"server_info" in data):
-                    try:
-                        js = json.loads(data.decode("utf-8", "ignore"))
-                        if "server_info" in js:
-                            host_header = self.headers.get("Host", "tv.smre.run.place")
-                            host_name = host_header.split(":")[0]
-                            js["server_info"]["url"] = host_name
-                            js["server_info"]["port"] = "80"
-                            js["server_info"]["server_protocol"] = "http"
-                            js["server_info"]["https_port"] = "443"
-                            data = json.dumps(js).encode("utf-8")
-                    except Exception as ex:
-                        print(f"[!] Erro ao reescrever server_info: {ex}")
-                elif method == "GET" and ("get_live" in query_str or "get_vod" in query_str or "get_series" in query_str):
-                    with XTREAM_CACHE_LOCK:
-                        if len(XTREAM_CACHE) > 50:
-                            XTREAM_CACHE.clear()
-                        XTREAM_CACHE[cache_key] = (data, ctype, now + 120.0)
+                        js["server_info"]["url"] = host_name
+                        js["server_info"]["port"] = port
+                        js["server_info"]["server_protocol"] = proto
+                        js["server_info"]["https_port"] = "443"
+                        data = json.dumps(js).encode("utf-8")
+                except Exception as ex:
+                    print(f"[!] Erro ao reescrever server_info: {ex}")
+            elif is_list_call:
+                with XTREAM_CACHE_LOCK:
+                    if len(XTREAM_CACHE) > 50:
+                        XTREAM_CACHE.clear()
+                    XTREAM_CACHE[cache_key] = (data, ctype, now + 600.0)
 
-                self.send_response(200)
-                self.send_header("Content-Type", ctype)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
         except Exception as e:
-            print(f"[!] Erro no proxy Xtream: {e}")
-            self.send_error(502, f"Upstream error: {e}")
+            print(f"[!] Erro ao responder proxy Xtream: {e}")
 
     def resolve_stream_url(self, url):
         """

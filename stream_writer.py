@@ -24,6 +24,7 @@ import time
 import signal
 import urllib.request
 import urllib.error
+import json
 
 # --- TS Packet Parsing Helpers ---
 
@@ -288,30 +289,25 @@ def main():
         with open(log_file, "a") as f:
             f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
 
-    # 1. Notifica o servidor para chavear o canal upstream primeiro
-    if channel_id:
-        try:
-            # PIN lido de arquivo (nunca via argv: apareceria em `ps`).
-            # Criado no deploy com o mesmo valor do TV_PIN do servidor.
-            pin = ""
-            try:
-                with open("/data/local/tmp/pin.txt") as pf:
-                    pin = pf.read().strip()
-            except Exception:
-                pass
-            headers = {"Content-Type": "application/json"}
-            if pin:
-                headers["X-Auth-PIN"] = pin
-            switch_req = urllib.request.Request(
-                f"{server_url}/api/switch",
-                data=f'{{"channel_id": "{channel_id}"}}'.encode("utf-8"),
-                headers=headers
-            )
-            with urllib.request.urlopen(switch_req, timeout=3) as resp:
-                pass
-            log(f"Canal chaveado no servidor: {channel_id}")
-        except Exception as e:
-            log(f"Aviso ao chavear canal no servidor: {e}")
+    # 1. Sincroniza o canal ativo do servidor para registro local (nunca força troca upstream)
+    try:
+        status_req = urllib.request.Request(
+            f"{server_url}/api/status",
+            headers={"User-Agent": "USBStreamTV/2.0"}
+        )
+        with urllib.request.urlopen(status_req, timeout=3) as resp:
+            status_data = json.loads(resp.read().decode("utf-8"))
+            active_ch = status_data.get("active_channel_id")
+            if active_ch:
+                channel_id = active_ch
+                try:
+                    with open("/data/local/tmp/current_channel.txt", "w") as cf:
+                        cf.write(active_ch)
+                except Exception:
+                    pass
+                log(f"Sincronizado com canal ativo no servidor: {active_ch}")
+    except Exception as e:
+        log(f"Aviso ao consultar status do servidor: {e}")
 
     if fifo_path:
         # Modo FUSE-direct: posições absolutas sequenciais num FIFO para o

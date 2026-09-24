@@ -92,12 +92,16 @@ while true; do
     TICK=$((TICK + 1))
     if [ $TICK -ge 3 ]; then
         TICK=0
-        if ! is_alive; then
+        if [ ! -f /data/local/tmp/vod_mode.flag ] && ! is_alive; then
             CH=""
             TUNNEL_URL=$(cat "$URL_FILE" 2>/dev/null | tr -d '\r\n')
             for CAND in "$TUNNEL_URL" "http://127.0.0.1:8080" "http://192.168.1.5:8080" "http://192.168.1.8:8080"; do
                 [ -z "$CAND" ] && continue
-                CH=$("$PYTHON" -c "import urllib.request,json,sys; print(json.load(urllib.request.urlopen('$CAND/api/status', timeout=3))['active_channel_id'])" 2>/dev/null)
+                if [ -x "/data/local/tmp/curl" ]; then
+                    CH=$(/data/local/tmp/curl -s --max-time 3 "$CAND/api/status" 2>/dev/null | grep -o '"active_channel_id": *"[^"]*"' | head -n1 | cut -d'"' -f4)
+                elif [ -x "$PYTHON" ]; then
+                    CH=$("$PYTHON" -c "import urllib.request,json,sys; print(json.load(urllib.request.urlopen('$CAND/api/status', timeout=3))['active_channel_id'])" 2>/dev/null)
+                fi
                 [ -n "$CH" ] && break
             done
             [ -z "$CH" ] && CH=$(cat "$CH_FILE" 2>/dev/null)

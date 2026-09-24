@@ -41,6 +41,17 @@ DEPLOY_FILE = os.path.join(CONFIG_DIR, "channels_deploy.json")
 CHANNELS_FILE = os.environ.get("CHANNELS_FILE", DEPLOY_FILE if os.path.exists(DEPLOY_FILE) else os.path.join(CONFIG_DIR, "channels.json"))
 MOVIES_DIR = os.environ.get("MOVIES_DIR", os.path.join(CONFIG_DIR, "filmes"))
 EVENT_LOG = os.path.join(CONFIG_DIR, "server_events.log")
+VOD_DIR = os.environ.get("VOD_DIR", os.path.join(CONFIG_DIR, "vod_cache"))
+os.makedirs(VOD_DIR, exist_ok=True)
+VOD_TASKS = {}
+VOD_TASKS_LOCK = threading.Lock()
+ACTIVE_VOD_TASK = None
+
+try:
+    import gen_template
+except Exception:
+    gen_template = None
+
 
 def log_event(msg):
     """Persistent event log: switches, ffmpeg (re)starts, reconnects.
@@ -469,7 +480,7 @@ def resolve_youtube(yt_url):
         "use_proxy": used_proxy
     }
 
-def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False):
+def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_sec=0):
     is_http = url.startswith("http://") or url.startswith("https://")
     url_lower = url.lower()
     is_googlevideo = "googlevideo" in url_lower or (audio_url and "googlevideo" in audio_url.lower())
@@ -506,7 +517,8 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False):
         if ".mp4" in url_lower or ".mkv" in url_lower or is_googlevideo:
             cmd.extend([
                 "-reconnect", "1",
-                "-reconnect_delay_max", "3"
+                "-reconnect_streamed", "1",
+                "-reconnect_delay_max", "5"
             ])
         else:
             cmd.extend([
@@ -521,9 +533,11 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False):
 
     cmd.extend([
         "-probesize", "1000000",
-        "-analyzeduration", "2000000",
-        "-i", url
+        "-analyzeduration", "2000000"
     ])
+    if start_sec and start_sec > 0:
+        cmd.extend(["-ss", str(int(start_sec))])
+    cmd.extend(["-i", url])
 
     # Input 1: Áudio DASH separado (YouTube 1080p)
     if audio_url:
@@ -532,12 +546,15 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False):
         cmd.extend([
             "-user_agent", "Mozilla/5.0",
             "-reconnect", "1",
-            "-reconnect_delay_max", "3",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "5",
             "-probesize", "1000000",
             "-analyzeduration", "2000000"
         ])
         if not is_googlevideo and (use_proxy or is_vod) and RESIDENTIAL_HTTP_PROXY:
             cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
+        if start_sec and start_sec > 0:
+            cmd.extend(["-ss", str(int(start_sec))])
         cmd.extend(["-i", audio_url])
 
     if STREAM_RESOLUTION == "1080p":
@@ -615,6 +632,8 @@ class StreamHub:
         self.current_is_live = False
         self.current_is_temporary = False
         self.fallback_channel = None
+        self.last_live_channel = self.current_channel_id
+        self.temporary_retries = 0
         self.youtube_meta = None
         
         self.subscribers = set()
@@ -655,15 +674,17 @@ class StreamHub:
         self.keepalive_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
         self.keepalive_thread.start()
 
-    def _start_initial(self):
+    def _start_initial(self, start_sec=0):
         cmd = build_ffmpeg_cmd(
             self.current_url, 
             audio_url=self.current_audio_url, 
             is_live=self.current_is_live,
-            use_proxy=getattr(self, "current_use_proxy", False)
+            use_proxy=getattr(self, "current_use_proxy", False),
+            start_sec=start_sec
         )
-        print(f"[*] Hub iniciando canal inicial: {self.current_channel_name} ({self.current_url})")
-        log_event(f"FFMPEG_START {self.current_channel_id}")
+        tag = f" (offset {start_sec}s)" if start_sec > 0 else ""
+        print(f"[*] Hub iniciando canal: {self.current_channel_name} ({self.current_url}){tag}")
+        log_event(f"FFMPEG_START {self.current_channel_id}{tag}")
         try:
             self.proc = subprocess.Popen(
                 cmd,
@@ -672,7 +693,7 @@ class StreamHub:
                 bufsize=1048576
             )
         except Exception as e:
-            print(f"[!] Erro ao iniciar processo inicial: {e}")
+            print(f"[!] Erro ao iniciar processo: {e}")
 
     def _load_slate(self):
         """Carrega o vídeo-placeholder 'Sem Sinal' na RAM, dividido em chunks com pacing exato."""
@@ -764,6 +785,57 @@ class StreamHub:
         for d in dead:
             self.subscribers.discard(d)
 
+    def _handle_proc_exit(self, p, rc):
+        if p != self.proc or self.switching or self.in_standby:
+            return
+
+        if self.current_is_temporary:
+            meta = self.youtube_meta or {}
+            duration = meta.get("duration") or 0
+            started_at = meta.get("started_at") or time.time()
+            elapsed = time.time() - started_at
+
+            # Checa se o vídeo terminou naturalmente (rc == 0 e tempo decorrido próximo à duração total)
+            finished_naturally = (rc == 0) and (duration == 0 or elapsed >= max(0, duration - 15))
+
+            if not finished_naturally and self.temporary_retries < 3:
+                self.temporary_retries += 1
+                seek_pos = max(0, int(elapsed - 2))
+                print(f"[!] Transmissão temporária ({self.current_channel_name}) oscilou (rc={rc}, {int(elapsed)}s/{duration}s). Reconectando em {seek_pos}s (tentativa {self.temporary_retries}/3)...")
+                log_event(f"TEMPORARY_STREAM_RETRY {self.current_channel_id} (attempt {self.temporary_retries}/3 at {seek_pos}s)")
+                time.sleep(1)
+                if not self.switching and not self.in_standby:
+                    with self.lock:
+                        self.restamper.start_new_channel()
+                    self._start_initial(start_sec=seek_pos)
+                return
+
+            # Terminou normalmente ou esgotou tentativas de reconexão
+            fallback_ch = self.fallback_channel or getattr(self, "last_live_channel", None) or "globo-morena-dourados"
+            ch = CH_MGR.get_channel(fallback_ch)
+            reason = "finalizada" if finished_naturally else f"interrompida após {self.temporary_retries} tentativas"
+            print(f"[✓] Transmissão temporária {reason} ({self.current_channel_name}, rc={rc}). Retornando à TV ao vivo ({fallback_ch})...")
+            log_event(f"TEMPORARY_STREAM_ENDED {self.current_channel_id} -> fallback to {fallback_ch} (reason: {reason})")
+            self.current_is_temporary = False
+            self.fallback_channel = None
+            self.youtube_meta = None
+            self.temporary_retries = 0
+            if ch:
+                self.current_channel_id = ch["id"]
+                self.current_channel_name = ch["name"]
+                self.current_url = ch["url"]
+                self.current_audio_url = None
+                self.current_is_live = False
+            self.switch_channel(channel_id=fallback_ch, force=True)
+        else:
+            print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
+            log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
+            time.sleep(1)
+            if not self.switching and not self.in_standby:
+                with self.lock:
+                    self.restamper.start_new_channel()
+                self._start_initial()
+
     def _reader_loop(self):
         while self.running:
             # Standby inteligente: 90s sem ouvintes encerra FFmpeg
@@ -781,6 +853,7 @@ class StreamHub:
                             except Exception:
                                 pass
                             self.proc = None
+                        continue
 
             if self.in_standby:
                 time.sleep(0.5)
@@ -792,33 +865,8 @@ class StreamHub:
                 continue
 
             if p.poll() is not None:
-                if p == self.proc and not self.switching and not self.in_standby:
-                    rc = p.poll()
-                    if self.current_is_temporary:
-                        fallback_ch = self.fallback_channel or "globo-morena-dourados"
-                        ch = CH_MGR.get_channel(fallback_ch)
-                        print(f"[✓] Transmissão temporária finalizada ({self.current_channel_name}, rc={rc}). Retornando à TV ao vivo ({fallback_ch})...")
-                        log_event(f"TEMPORARY_STREAM_ENDED {self.current_channel_id} -> fallback to {fallback_ch}")
-                        self.current_is_temporary = False
-                        self.fallback_channel = None
-                        self.youtube_meta = None
-                        if ch:
-                            self.current_channel_id = ch["id"]
-                            self.current_channel_name = ch["name"]
-                            self.current_url = ch["url"]
-                            self.current_audio_url = None
-                            self.current_is_live = False
-                        self.switch_channel(channel_id=fallback_ch, force=True)
-                    else:
-                        print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
-                        log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
-                        time.sleep(1)
-                        if not self.switching and not self.in_standby:
-                            with self.lock:
-                                self.restamper.start_new_channel()
-                            self._start_initial()
-                else:
-                    time.sleep(0.05)
+                self._handle_proc_exit(p, p.poll())
+                time.sleep(0.05)
                 continue
 
             try:
@@ -844,34 +892,10 @@ class StreamHub:
                         self.health_window.append((time.time(), len(processed)))
                         self._broadcast(processed)
             else:
-                # Processo terminou e não estamos trocando de canal
-                if p.poll() is not None and p == self.proc and not self.switching and not self.in_standby:
-                    rc = p.poll()
-                    if self.current_is_temporary:
-                        fallback_ch = self.fallback_channel or "globo-morena-dourados"
-                        ch = CH_MGR.get_channel(fallback_ch)
-                        print(f"[✓] Transmissão temporária finalizada ({self.current_channel_name}, rc={rc}). Retornando à TV ao vivo ({fallback_ch})...")
-                        log_event(f"TEMPORARY_STREAM_ENDED {self.current_channel_id} -> fallback to {fallback_ch}")
-                        self.current_is_temporary = False
-                        self.fallback_channel = None
-                        self.youtube_meta = None
-                        if ch:
-                            self.current_channel_id = ch["id"]
-                            self.current_channel_name = ch["name"]
-                            self.current_url = ch["url"]
-                            self.current_audio_url = None
-                            self.current_is_live = False
-                        self.switch_channel(channel_id=fallback_ch, force=True)
-                    else:
-                        print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
-                        log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
-                        time.sleep(1)
-                        if not self.switching and not self.in_standby:
-                            with self.lock:
-                                self.restamper.start_new_channel()
-                            self._start_initial()
-                else:
-                    time.sleep(0.01)
+                # Chunk vazio ou erro de leitura: processo pode ter terminado
+                if p.poll() is not None:
+                    self._handle_proc_exit(p, p.poll())
+                time.sleep(0.01)
 
     def _keepalive_loop(self):
         """Keepalive inteligente com injeção de Slate Video.
@@ -966,6 +990,8 @@ class StreamHub:
                     target_id = ch["id"]
                     target_name = ch["name"]
                     target_url = ch["url"]
+                    if not custom_url:
+                        self.last_live_channel = target_id
                 else:
                     return
 
@@ -1024,6 +1050,7 @@ class StreamHub:
                     self.current_use_proxy = False
                     self.fallback_channel = None
                     self.youtube_meta = None
+                    self.temporary_retries = 0
 
                     # Avança timestamps e continuity counters de forma estritamente contínua
                     self.restamper.start_new_channel()
@@ -1064,6 +1091,7 @@ class StreamHub:
         def _do_switch():
             try:
                 self.switching = True
+                self.temporary_retries = 0
                 yt_id = hashlib.md5(meta['original_url'].encode()).hexdigest()[:8]
                 target_id = f"youtube_{yt_id}"
                 target_name = f"YouTube: {meta['title']}"
@@ -1071,7 +1099,12 @@ class StreamHub:
                 audio_url = meta.get("audio_url")
                 is_live = meta.get("is_live", False)
                 use_proxy = meta.get("use_proxy", False)
-                return_channel = self.current_channel_id if not self.current_is_temporary else (self.fallback_channel or "globo-morena-dourados")
+                return_channel = (
+                    getattr(self, "last_live_channel", None)
+                    or (self.current_channel_id if not self.current_is_temporary else None)
+                    or self.fallback_channel
+                    or "globo-morena-dourados"
+                )
 
                 print(f"\n[▶️] INICIANDO TRANSMISSÃO DO YOUTUBE: {target_name} (via_proxy={use_proxy})")
                 log_event(f"YOUTUBE_START {target_id} ({meta['title']})")
@@ -1158,6 +1191,124 @@ class StreamHub:
 
 HUB = StreamHub()
 
+def dispatch_device_cmd(cmd):
+    """Envia comando para o dispositivo ativo (Tablet ou Xiaomi)."""
+    log_event(f"DISPATCH_CMD {cmd}")
+    print(f"[*] Disparando comando para aparelho: {cmd}")
+    HUB.pending_command = f"su -c '{cmd}'"
+    HUB.tablet_pending_cmd = cmd
+
+    def _run_adb():
+        for port in [25555, 25556]:
+            try:
+                subprocess.run(["adb", "-s", f"127.0.0.1:{port}", "shell", f"su -c '{cmd}'"],
+                               timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+    threading.Thread(target=_run_adb, daemon=True).start()
+
+def _prepare_vod_thread(task_id, url, title):
+    with VOD_TASKS_LOCK:
+        task = VOD_TASKS.get(task_id)
+        if not task:
+            return
+        task["status"] = "processing"
+        task["progress"] = 5
+
+    out_file = os.path.join(VOD_DIR, f"{task_id}.mp4")
+    out_tmpl = os.path.join(VOD_DIR, f"{task_id}.bin")
+
+    is_yt = any(x in url.lower() for x in ["youtube.com", "youtu.be"])
+    clean_title = title or "Filme VOD"
+    duration = 0
+
+    try:
+        if is_yt:
+            with VOD_TASKS_LOCK:
+                task["progress"] = 10
+            meta = resolve_youtube(url)
+            clean_title = meta.get("title") or clean_title
+            duration = meta.get("duration") or 0
+            v_url = meta.get("video_url")
+            a_url = meta.get("audio_url")
+
+            cmd = ["ffmpeg", "-y"]
+            if v_url:
+                cmd.extend(["-i", v_url])
+            if a_url:
+                cmd.extend(["-i", a_url])
+                cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
+            else:
+                cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
+
+            cmd.extend([
+                "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+                "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-level", "4.1",
+                "-b:v", "2600k", "-maxrate", "3000k", "-bufsize", "1800k", "-g", "30",
+                "-c:a", "ac3", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                out_file
+            ])
+        else:
+            use_proxy = any(kw in url.lower() for kw in ["fontedecanais", "movie", "series"])
+            cmd = ["ffmpeg", "-y"]
+            if use_proxy and RESIDENTIAL_HTTP_PROXY:
+                cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
+            cmd.extend([
+                "-i", url,
+                "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+                "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-level", "4.1",
+                "-b:v", "2600k", "-maxrate", "3000k", "-bufsize", "1800k", "-g", "30",
+                "-c:a", "ac3", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                out_file
+            ])
+
+        print(f"[VOD] Processando '{clean_title}'...")
+        proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
+
+        time_pat = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
+        for line in proc.stderr:
+            m = time_pat.search(line)
+            if m:
+                hrs, mins, secs = int(m.group(1)), int(m.group(2)), float(m.group(3))
+                cur_secs = hrs * 3600 + mins * 60 + secs
+                if duration > 0:
+                    pct = min(98, max(10, int((cur_secs / duration) * 100)))
+                    with VOD_TASKS_LOCK:
+                        task["progress"] = pct
+
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"FFmpeg falhou com código {proc.returncode}")
+
+        file_size = os.path.getsize(out_file)
+        if file_size < 10000:
+            raise RuntimeError("Arquivo gerado vazio ou corrompido")
+
+        fat_name = re.sub(r'[^a-zA-Z0-9 _-]', '', clean_title).strip()
+        fat_name = (fat_name[:26] or "FILME") + ".mp4"
+
+        if gen_template:
+            gen_template.build_fat_template(file_name=fat_name, file_size=file_size, out_path=out_tmpl)
+
+        with VOD_TASKS_LOCK:
+            task["status"] = "ready"
+            task["progress"] = 100
+            task["file_path"] = out_file
+            task["template_path"] = out_tmpl
+            task["file_size"] = file_size
+            task["display_name"] = fat_name
+        print(f"[✓] VOD pronto: {clean_title} ({file_size / (1024*1024):.1f} MB)")
+    except Exception as e:
+        print(f"[!] Erro no VOD {task_id}: {e}")
+        with VOD_TASKS_LOCK:
+            task["status"] = "error"
+            task["error"] = str(e)
+
+
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
@@ -1194,6 +1345,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             m = XTREAM_STREAM_RE.match(path)
             kind, user, pwd, stream_id, ext = m.groups()
             self.handle_xtream_stream(kind or "live", user, pwd, stream_id, ext)
+        elif path.startswith("/vod/"):
+            self.handle_vod_stream(path)
+        elif path == "/api/vod/status":
+            self.send_vod_status()
         elif path == "/api/status":
             self.send_status_json()
         elif path == "/api/channels":
@@ -1248,6 +1403,12 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/switch":
             self.handle_switch()
+        elif path == "/api/vod/prepare":
+            self.handle_vod_prepare()
+        elif path == "/api/vod/play":
+            self.handle_vod_play()
+        elif path == "/api/vod/live":
+            self.handle_vod_live()
         elif path == "/api/youtube":
             self.handle_youtube()
         elif path in ("/player_api.php", "/xmltv.php"):
@@ -1339,6 +1500,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             "slate_mode": HUB.slate_mode,
             "slate_active_secs": round(time.time() - HUB.slate_start_time, 1) if HUB.slate_mode else 0,
             "youtube": HUB.youtube_meta,
+            "active_vod": ACTIVE_VOD_TASK,
+            "vod_display_name": VOD_TASKS[ACTIVE_VOD_TASK].get("display_name") if (ACTIVE_VOD_TASK and ACTIVE_VOD_TASK in VOD_TASKS) else None,
             "is_temporary": HUB.current_is_temporary,
             "client": client_data
         }
@@ -1798,8 +1961,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps({"success": True, "message": "PTS epoch reset to 3.0s"}).encode("utf-8"))
 
-    def send_fuse_bin(self):
-        fpath = os.path.join(CONFIG_DIR, "fuse_direct_arm_verified")
+    def send_fuse_bin(self, fname="fuse_direct_arm_verified"):
+        fpath = os.path.join(CONFIG_DIR, fname)
         if not os.path.exists(fpath):
             self.send_error(404, "Binary not found")
             return
@@ -1810,6 +1973,222 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def handle_vod_prepare(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+        try:
+            params = json.loads(body)
+        except Exception:
+            params = urllib.parse.parse_qs(body)
+            params = {k: v[0] for k, v in params.items()}
+
+        req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
+        if AUTH_PIN and req_pin != AUTH_PIN:
+            self.send_response(401)
+            self.end_headers()
+            return
+
+        url = (params.get("url") or "").strip()
+        title = (params.get("title") or "").strip()
+        if not url:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": "URL não fornecida"}).encode("utf-8"))
+            return
+
+        task_id = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
+        with VOD_TASKS_LOCK:
+            existing = VOD_TASKS.get(task_id)
+            if existing and existing.get("status") == "ready" and os.path.exists(existing.get("file_path", "")):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "success": True,
+                    "task_id": task_id,
+                    "status": "ready",
+                    "display_name": existing.get("display_name", "")
+                }).encode("utf-8"))
+                return
+
+            VOD_TASKS[task_id] = {
+                "id": task_id,
+                "url": url,
+                "title": title or "Vídeo VOD",
+                "display_name": "",
+                "status": "pending",
+                "progress": 0,
+                "error": None,
+                "created_at": time.time()
+            }
+
+        threading.Thread(target=_prepare_vod_thread, args=(task_id, url, title), daemon=True).start()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps({"success": True, "task_id": task_id, "status": "pending"}).encode("utf-8"))
+
+    def send_vod_status(self):
+        global ACTIVE_VOD_TASK
+        with VOD_TASKS_LOCK:
+            tasks_list = list(VOD_TASKS.values())
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps({
+            "active_vod": ACTIVE_VOD_TASK,
+            "tasks": tasks_list
+        }).encode("utf-8"))
+
+    def handle_vod_play(self):
+        global ACTIVE_VOD_TASK
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+        try:
+            params = json.loads(body)
+        except Exception:
+            params = urllib.parse.parse_qs(body)
+            params = {k: v[0] for k, v in params.items()}
+
+        req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
+        if AUTH_PIN and req_pin != AUTH_PIN:
+            self.send_response(401)
+            self.end_headers()
+            return
+
+        task_id = params.get("task_id")
+        with VOD_TASKS_LOCK:
+            task = VOD_TASKS.get(task_id)
+        if not task or task.get("status") != "ready":
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": "VOD não está pronto"}).encode("utf-8"))
+            return
+
+        ACTIVE_VOD_TASK = task_id
+        dispatch_device_cmd(f"sh /data/local/tmp/switch_vod.sh {task_id}")
+        log_event(f"VOD_PLAY {task_id} ({task.get('display_name')})")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps({"success": True, "task_id": task_id, "display_name": task.get("display_name")}).encode("utf-8"))
+
+    def handle_vod_live(self):
+        global ACTIVE_VOD_TASK
+        ACTIVE_VOD_TASK = None
+        dispatch_device_cmd("sh /data/local/tmp/switch_live.sh")
+        log_event("VOD_RETURN_LIVE")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps({"success": True, "status": "live"}).encode("utf-8"))
+
+    def handle_vod_stream(self, path):
+        parts = [p for p in path.strip("/").split("/") if p]
+        if len(parts) < 3:
+            self.send_error(404, "Invalid VOD path")
+            return
+        task_id = parts[1]
+        filename = parts[2]
+
+        with VOD_TASKS_LOCK:
+            task = VOD_TASKS.get(task_id)
+
+        if not task:
+            f_mp4 = os.path.join(VOD_DIR, f"{task_id}.mp4")
+            f_bin = os.path.join(VOD_DIR, f"{task_id}.bin")
+            if os.path.exists(f_mp4):
+                task = {
+                    "file_path": f_mp4,
+                    "template_path": f_bin,
+                    "status": "ready"
+                }
+            else:
+                self.send_error(404, "VOD task not found")
+                return
+
+        if filename == "template.bin":
+            tmpl_path = task.get("template_path")
+            if not tmpl_path or not os.path.exists(tmpl_path):
+                self.send_error(404, "Template not found")
+                return
+            with open(tmpl_path, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        if filename in ("movie.mp4", "movie.ts"):
+            file_path = task.get("file_path")
+            if not file_path or not os.path.exists(file_path):
+                self.send_error(404, "Movie file not found")
+                return
+            file_size = os.path.getsize(file_path)
+            range_header = self.headers.get("Range")
+
+            if range_header:
+                m = re.match(r"bytes=(\d+)-(\d*)", range_header)
+                if m:
+                    start = int(m.group(1))
+                    end = int(m.group(2)) if m.group(2) else file_size - 1
+                    if start >= file_size:
+                        self.send_response(416, "Range Not Satisfiable")
+                        self.send_header("Content-Range", f"bytes */{file_size}")
+                        self.end_headers()
+                        return
+                    if end >= file_size:
+                        end = file_size - 1
+                    content_len = end - start + 1
+                    self.send_response(206, "Partial Content")
+                    self.send_header("Content-Type", "video/mp4")
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                    self.send_header("Content-Length", str(content_len))
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    with open(file_path, "rb") as f:
+                        f.seek(start)
+                        rem = content_len
+                        while rem > 0:
+                            chunk = f.read(min(131072, rem))
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            rem -= len(chunk)
+                    return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", str(file_size))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            with open(file_path, "rb") as f:
+                while True:
+                    chunk = f.read(131072)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            return
+
+        self.send_error(404, "Not Found")
 
     def send_dashboard(self):
         tunnel_url = "http://localhost:8080"
@@ -2263,22 +2642,47 @@ class RequestHandler(BaseHTTPRequestHandler):
             </div>
         </div>
 
-        <!-- YouTube Cast Card -->
+        <!-- YouTube Cast & Cinema VOD Card -->
         <div class="youtube-card">
             <div class="youtube-header">
-                <span style="font-size: 18px;">▶️</span>
-                <span style="font-weight: 700; color: #ef4444; font-size: 14px;">Transmitir YouTube na TV</span>
+                <span style="font-size: 18px;">🎬</span>
+                <span style="font-weight: 700; color: #ef4444; font-size: 14px;">Cinema VOD & YouTube na TV</span>
             </div>
             <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px; margin-bottom: 8px;">
-                Vídeos, Shorts ou Lives em 1080p. Ao finalizar, retorna automaticamente à TV ao vivo.
+                Filmes, Séries ou Vídeos com <strong>Pause, Seek (Avanço/Volta) e Retomada</strong> nativos no controle da TV.
             </div>
-            <div class="custom-input-group">
-                <input type="text" id="yt-url-input" placeholder="Cole link do YouTube (ex: https://youtu.be/...)" onkeydown="if(event.key==='Enter') castYouTube()">
-                <button class="btn-play-yt" id="btn-yt" onclick="castYouTube()">
-                    <span id="btn-yt-text">Transmitir</span>
+            <div class="custom-input-group" style="flex-wrap: wrap;">
+                <input type="text" id="yt-url-input" placeholder="Cole link do YouTube ou Filme (ex: https://youtu.be/...)" onkeydown="if(event.key==='Enter') prepareVOD()">
+                <button class="btn-play-yt" id="btn-vod-prep" onclick="prepareVOD()" style="background: #e50914;" title="Prepara o filme com suporte nativo a Pause e Seek na TV">
+                    <span id="btn-vod-prep-text">🎬 Preparar Cinema (Seek/Pause)</span>
+                    <span id="btn-vod-prep-spin" class="spinner" style="display: none;"></span>
+                </button>
+                <button class="btn-play-yt" id="btn-yt" onclick="castYouTube()" style="background: #334155;" title="Transmitir diretamente como Live contínua">
+                    <span id="btn-yt-text">▶️ Ao Vivo</span>
                     <span id="btn-yt-spin" class="spinner" style="display: none;"></span>
                 </button>
             </div>
+            
+            <!-- VOD Status & Control Box -->
+            <div id="vod-status-box" style="display: none; margin-top: 10px; padding: 12px; background: rgba(229, 9, 20, 0.08); border: 1px solid rgba(229, 9, 20, 0.3); border-radius: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span id="vod-movie-title" style="font-weight: 700; font-size: 13px; color: #fff;"></span>
+                    <span id="vod-status-badge" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; background: #2563eb; color: #fff;">Preparando</span>
+                </div>
+                <div id="vod-progress-bar-bg" style="width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; margin-bottom: 8px;">
+                    <div id="vod-progress-bar" style="width: 0%; height: 100%; background: #e50914; transition: width 0.3s;"></div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <button id="btn-vod-play" onclick="playVOD()" style="display: none; background: #16a34a; color: #fff; border: none; border-radius: 6px; padding: 8px 14px; font-weight: 700; font-size: 12px; cursor: pointer;">
+                        ▶️ Assistir na TV (ConnectShare)
+                    </button>
+                    <button id="btn-vod-live" onclick="returnLive()" style="display: none; background: #475569; color: #fff; border: none; border-radius: 6px; padding: 8px 14px; font-weight: 700; font-size: 12px; cursor: pointer;">
+                        📺 Voltar para TV Ao Vivo
+                    </button>
+                    <span id="vod-hint" style="font-size: 11px; color: var(--text-dim);"></span>
+                </div>
+            </div>
+
             <div id="yt-active-box" style="display: none; margin-top: 10px; padding: 10px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px;">
                 <div style="display: flex; gap: 10px; align-items: center;">
                     <img id="yt-thumb" style="width: 72px; height: 42px; border-radius: 4px; object-fit: cover; background: #000;" src="" />
@@ -2386,6 +2790,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 applyFilters();
                 updateStatus();
                 setInterval(updateStatus, 2000);
+                pollVODStatus();
+                setInterval(pollVODStatus, 2500);
             }} catch (e) {{
                 console.error(e);
             }}

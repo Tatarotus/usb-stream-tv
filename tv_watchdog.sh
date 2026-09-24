@@ -46,7 +46,7 @@ while true; do
     fi
 
     # 4. Check stream_fetcher
-    if ! pgrep stream_fetcher >/dev/null 2>&1; then
+    if [ ! -f /data/local/tmp/vod_mode.flag ] && ! pgrep stream_fetcher >/dev/null 2>&1; then
         /system/xbin/stream_fetcher /data/local/tmp/live_pipe tv.smre.run.place 80 >> /data/local/tmp/stream_fetcher.log 2>&1 &
     fi
 

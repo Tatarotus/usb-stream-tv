@@ -1,18 +1,39 @@
 
-Atualmente, meu workflow para assistir IPTV na TV funciona da seguinte forma:
+Atualmente, meu setup de reprodução na TV foi desenvolvido principalmente pensando em canais IPTV ao vivo.
 
-Quando um canal, algo relativamente comum em transmissões IPTV, apresenta oscilações, perda de pacotes ou fica algum período sem enviar dados, o arquivo `.ts` pode fazer o player da TV (ConnectShare) travar.
+Para canais ao vivo isso funciona bem porque as transmissões são contínuas e, normalmente, ficam disponíveis 24 horas por dia. O sistema atualmente trata o conteúdo essencialmente como uma transmissão ao vivo.
 
-O problema é que, depois que isso acontece, trocar de canal pelo controle web ou pelo aplicativo nem sempre recupera a reprodução. Na prática, preciso desconectar e conectar novamente o dispositivo USB para que a TV atualize/reabra a transmissão.
+O problema aparece quando quero reproduzir um conteúdo sob demanda, como um filme, um vídeo do Youtube ou episódio de série
 
-Isso é particularmente inconveniente porque nem sempre sei antecipadamente quais canais estão funcionando de forma estável.
+A TV consegue executar o vídeo normalmente, porém o comportamento continua sendo de uma transmissão ao vivo: não tenho `pause`, `seek`, avanço/retrocesso ou uma forma adequada de continuar posteriormente de onde parei.
 
-Estou pensando em criar algum tipo de listener/monitor na VPS que acompanhe a saúde de cada transmissão. Caso seja detectada uma interrupção, queda significativa no bitrate ou ausência de pacotes por determinado período, o sistema poderia automaticamente enviar pacotes sinteticos ou um video escrito "em manutenção ou no signal" na stream ou tomar alguma outra ação para impedir que a TV receba um fluxo que faça o ConnectShare travar.
+Por exemplo:
 
-Quero descobrir se existe uma solução melhor do que essa, ou gostaria que você analisasse essa ideia de forma mais ampla antes de implementá-la.
+* começo a assistir um filme à noite;
+* assisto aproximadamente 40 minutos;
+* quero continuar no dia seguinte;
+* atualmente, teria que começar o vídeo novamente do início;
+* não consigo simplesmente pausar e depois continuar;
+* também não consigo avançar diretamente para determinado ponto do filme.
+
+Quero investigar se é possível adaptar o setup atual para suportar corretamente **VOD (Video on Demand)**, mantendo os canais ao vivo funcionando exatamente como estão.
+
+Minha dúvida principal é:
+
+**É tecnicamente possível adicionar suporte adequado a pause, seek e retomada de reprodução com o setup atual?
+Teria que controlar tudo por um app externo?
+
+Poderia existir uma maneira que o ConnectShare da TV reconheça o conteúdo como um vídeo navegável em vez de uma transmissão ao vivo?
+
+Valeria apena baixar o conteúdo na vps para executar on Demand?
+
+Seria muito dificil a implementação dessa funcionalidade?
+Também quero saber se vale a pena implementar isso ou se a complexidade/limitações da TV tornam a solução pouco prática.
+
+Quais seriam os caminhos? 
+
+Quero descobrir se existe uma solução para esse problema ou uma abordagem melhor que eu não sei, gostaria que você analizasse as ideias de forma mais ampla antes de implementá-la. Quero que você investigue a arquitetura atual e determine o melhor course of action possível. 
 
 
-Quero uma solução robusta, que minimize a possibilidade de a TV entrar nesse estado de travamento e que elimine, sempre que possível, a necessidade de desconectar e reconectar manualmente o USB.
 
-Antes de implementar, explique os trade-offs e caminhos proponha uma estratégia de implementação  depois de aprovado apenas crie o plano de implementação em  markdown para se possível outro agente executar
-
+Antes de implementar, explique os trade-offs e caminhos proponha uma estratégia de implementação depois de aprovado apenas crie o plano de implementação em markdown para se possível outro agente executar

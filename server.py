@@ -32,7 +32,7 @@ XTREAM_CACHE_LOCK = threading.Lock()
 RESIDENTIAL_HTTP_PROXY = os.environ.get("RESIDENTIAL_HTTP_PROXY", "http://172.20.0.1:8118")
 RESIDENTIAL_SOCKS_PROXY = os.environ.get("RESIDENTIAL_SOCKS_PROXY", "socks5h://172.20.0.1:1080")
 STREAM_RESOLUTION = os.environ.get("STREAM_RESOLUTION", "1080p").lower()
-SLATE_GAP_THRESHOLD = float(os.environ.get("SLATE_GAP_THRESHOLD", 8.0))
+SLATE_GAP_THRESHOLD = float(os.environ.get("SLATE_GAP_THRESHOLD", 3.0))
 SLATE_AUTO_SWITCH_TIMEOUT = float(os.environ.get("SLATE_AUTO_SWITCH_TIMEOUT", 0))
 
 
@@ -46,6 +46,25 @@ os.makedirs(VOD_DIR, exist_ok=True)
 VOD_TASKS = {}
 VOD_TASKS_LOCK = threading.Lock()
 ACTIVE_VOD_TASK = None
+VOD_META_FILE = os.path.join(VOD_DIR, "vod_meta.json")
+
+def load_vod_tasks():
+    global VOD_TASKS
+    if os.path.exists(VOD_META_FILE):
+        try:
+            with open(VOD_META_FILE, "r") as f:
+                VOD_TASKS = json.load(f)
+        except Exception:
+            VOD_TASKS = {}
+
+def save_vod_tasks():
+    try:
+        with open(VOD_META_FILE, "w") as f:
+            json.dump(VOD_TASKS, f, indent=2)
+    except Exception:
+        pass
+
+load_vod_tasks()
 
 try:
     import gen_template
@@ -497,14 +516,9 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning"
     ]
 
-    # -re APENAS para arquivos locais em disco (/filmes/*.mp4).
-    # NUNCA usar -re para streams de rede (YouTube, HLS, IPTV), pois o cliente
-    # precisa poder preencher o buffer de RAM (fuse_direct) para absorver oscilações.
-    use_re = (not is_http)
-
-    # Input 0: Vídeo principal (ou vídeo+áudio progressivo)
-    if use_re:
-        cmd.append("-re")
+    # Input 0: Vídeo principal com pacing 1.0x em tempo real (-re)
+    # Impede que FFmpeg transcode a velocidades excessivas e estoure o buffer de 32MB da TV
+    cmd.append("-re")
 
     if is_http:
         ua = "Mozilla/5.0" if ("studut.shop" in url or "m3u8" in url or is_googlevideo) else "IPTVSmartersPro"
@@ -541,8 +555,6 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_
 
     # Input 1: Áudio DASH separado (YouTube 1080p)
     if audio_url:
-        if use_re:
-            cmd.append("-re")
         cmd.extend([
             "-user_agent", "Mozilla/5.0",
             "-reconnect", "1",
@@ -803,6 +815,12 @@ class StreamHub:
                 seek_pos = max(0, int(elapsed - 2))
                 print(f"[!] Transmissão temporária ({self.current_channel_name}) oscilou (rc={rc}, {int(elapsed)}s/{duration}s). Reconectando em {seek_pos}s (tentativa {self.temporary_retries}/3)...")
                 log_event(f"TEMPORARY_STREAM_RETRY {self.current_channel_id} (attempt {self.temporary_retries}/3 at {seek_pos}s)")
+                with self.lock:
+                    if self.slate_chunks:
+                        self.restamper.start_new_channel()
+                        self.slate_mode = True
+                        self.slate_start_time = time.time()
+                        self.stream_health = "slate"
                 time.sleep(1)
                 if not self.switching and not self.in_standby:
                     with self.lock:
@@ -830,6 +848,12 @@ class StreamHub:
         else:
             print(f"[!] Canal {self.current_channel_name} desconectou (rc={rc}). Reconectando...")
             log_event(f"FFMPEG_DIED rc={rc} ch={self.current_channel_id} -> reconnect")
+            with self.lock:
+                if self.slate_chunks:
+                    self.restamper.start_new_channel()
+                    self.slate_mode = True
+                    self.slate_start_time = time.time()
+                    self.stream_health = "slate"
             time.sleep(1)
             if not self.switching and not self.in_standby:
                 with self.lock:
@@ -932,38 +956,53 @@ class StreamHub:
                     slate_idx = 0
                 continue
 
-            # Gap detectado: decidir entre NULL packets e Slate
+            # Se já estamos em modo Slate (por desconexão ou gap longo anterior),
+            # continua transmitindo os chunks do slate compassados até que dados reais voltem!
+            if self.slate_mode:
+                if self.slate_chunks:
+                    now = time.time()
+                    if now - last_slate_broadcast >= next_slate_pace:
+                        chunk, dur = self.slate_chunks[slate_idx % len(self.slate_chunks)]
+                        with self.lock:
+                            processed = self.restamper.process_chunk(chunk)
+                            if processed:
+                                self._broadcast(processed)
+                        slate_idx += 1
+                        last_slate_broadcast = now
+                        next_slate_pace = dur
+                else:
+                    with self.lock:
+                        self._broadcast(null_burst)
+                continue
+
+            # Gap detectado: decidir entre NULL packets transitórios e Slate
             if gap < SLATE_GAP_THRESHOLD:
-                # Gap curto (0.6s–1.5s): NULL packets legados
+                # Gap curto (< 3.0s): NULL packets para absorver jitter transitório
                 if self.stream_health == "ok":
                     self.stream_health = "degraded"
                 with self.lock:
                     self._broadcast(null_burst)
                 continue
 
-            # Gap longo (> 1.5s): modo Slate!
+            # Gap longo (>= SLATE_GAP_THRESHOLD): modo Slate!
             if self.slate_chunks:
-                if not self.slate_mode:
-                    print(f"[⚠] Gap de {gap:.1f}s detectado — entrando no modo Slate (Sem Sinal).")
-                    log_event(f"SLATE_ENTER gap={gap:.1f}s")
-                    with self.lock:
-                        self.restamper.start_new_channel()
-                    self.slate_mode = True
-                    self.slate_start_time = time.time()
-                    self.stream_health = "slate"
-                    slate_idx = 0
-                    next_slate_pace = 0.0
-
+                print(f"[⚠] Gap de {gap:.1f}s detectado — entrando no modo Slate (Sem Sinal).")
+                log_event(f"SLATE_ENTER gap={gap:.1f}s")
+                with self.lock:
+                    self.restamper.start_new_channel()
+                self.slate_mode = True
+                self.slate_start_time = time.time()
+                self.stream_health = "slate"
+                slate_idx = 0
                 now = time.time()
-                if now - last_slate_broadcast >= next_slate_pace:
-                    chunk, dur = self.slate_chunks[slate_idx % len(self.slate_chunks)]
-                    with self.lock:
-                        processed = self.restamper.process_chunk(chunk)
-                        if processed:
-                            self._broadcast(processed)
-                    slate_idx += 1
-                    last_slate_broadcast = now
-                    next_slate_pace = dur
+                chunk, dur = self.slate_chunks[0]
+                with self.lock:
+                    processed = self.restamper.process_chunk(chunk)
+                    if processed:
+                        self._broadcast(processed)
+                slate_idx = 1
+                last_slate_broadcast = now
+                next_slate_pace = dur
             else:
                 # Fallback sem slate: NULL packets legados
                 if self.stream_health != "slate":
@@ -1229,35 +1268,93 @@ def _prepare_vod_thread(task_id, url, title):
             meta = resolve_youtube(url)
             clean_title = meta.get("title") or clean_title
             duration = meta.get("duration") or 0
-            v_url = meta.get("video_url")
-            a_url = meta.get("audio_url")
 
-            cmd = ["ffmpeg", "-y"]
-            if v_url:
-                cmd.extend(["-i", v_url])
-            if a_url:
-                cmd.extend(["-i", a_url])
-                cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
+            raw_file = os.path.join(VOD_DIR, f"{task_id}_raw.mkv")
+            yt_cmd = [
+                "yt-dlp",
+                "--no-warnings",
+                "--no-playlist",
+                "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                "--merge-output-format", "mkv",
+                "-o", raw_file
+            ]
+            if os.path.exists("/usr/bin/qjs"):
+                yt_cmd.extend(["--js-runtimes", "quickjs:/usr/bin/qjs"])
+            elif shutil.which("qjs"):
+                yt_cmd.extend(["--js-runtimes", f"quickjs:{shutil.which('qjs')}"])
+            if RESIDENTIAL_SOCKS_PROXY:
+                proxy_clean = RESIDENTIAL_SOCKS_PROXY.replace("socks5h://", "socks5://")
+                yt_cmd.extend(["--proxy", proxy_clean])
+            yt_cmd.append(url)
+
+            if not (os.path.exists(raw_file) and os.path.getsize(raw_file) > 1000000):
+                print(f"[VOD] Baixando YouTube '{clean_title}'...")
+                proc_yt = subprocess.Popen(yt_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                pct_pat = re.compile(r"(\d+\.\d+)%")
+                for line in proc_yt.stdout:
+                    m = pct_pat.search(line)
+                    if m:
+                        # Download phase maps to 10% - 50%
+                        pct = min(50, max(10, int(float(m.group(1)) * 0.4 + 10)))
+                        with VOD_TASKS_LOCK:
+                            task["progress"] = pct
+                proc_yt.wait()
+                if proc_yt.returncode != 0:
+                    raise RuntimeError(f"yt-dlp falhou com código {proc_yt.returncode}")
             else:
-                cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
+                print(f"[VOD] Arquivo raw já existente ({os.path.getsize(raw_file) / (1024*1024):.1f} MB), iniciando conversão...")
+                with VOD_TASKS_LOCK:
+                    task["progress"] = 50
 
-            cmd.extend([
+            # Transcode raw media with FFmpeg into 100% Samsung-compatible H.264 + AC3 stereo
+            cmd = [
+                "ffmpeg", "-y", "-i", raw_file,
                 "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+                "-r", "30",
                 "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-level", "4.1",
                 "-b:v", "2600k", "-maxrate", "3000k", "-bufsize", "1800k", "-g", "30",
                 "-c:a", "ac3", "-b:a", "192k", "-ar", "48000", "-ac", "2",
                 "-movflags", "+faststart",
                 "-f", "mp4",
                 out_file
-            ])
+            ]
+            print(f"[VOD] Codificando para Samsung TV H.264/AC3 '{clean_title}'...")
+            proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
+            time_pat = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
+            err_lines = []
+            for line in proc.stderr:
+                err_lines.append(line.strip())
+                if len(err_lines) > 20:
+                    err_lines.pop(0)
+                m = time_pat.search(line)
+                if m:
+                    hrs, mins, secs = int(m.group(1)), int(m.group(2)), float(m.group(3))
+                    cur_secs = hrs * 3600 + mins * 60 + secs
+                    if duration > 0:
+                        pct = min(98, max(50, int(50 + (cur_secs / duration) * 48)))
+                    else:
+                        pct = min(95, 50 + int(cur_secs / 30))
+                    with VOD_TASKS_LOCK:
+                        task["progress"] = pct
+            proc.wait()
+            try:
+                if os.path.exists(raw_file):
+                    os.remove(raw_file)
+            except Exception:
+                pass
+            if proc.returncode != 0:
+                err_snippet = " ".join([l for l in err_lines if "error" in l.lower() or "failed" in l.lower()][-3:])
+                raise RuntimeError(f"FFmpeg falhou ({proc.returncode}): {err_snippet or 'erro na conversão'}")
         else:
             use_proxy = any(kw in url.lower() for kw in ["fontedecanais", "movie", "series"])
             cmd = ["ffmpeg", "-y"]
             if use_proxy and RESIDENTIAL_HTTP_PROXY:
                 cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
             cmd.extend([
+                "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "-i", url,
                 "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+                "-r", "30",
                 "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-level", "4.1",
                 "-b:v", "2600k", "-maxrate", "3000k", "-bufsize", "1800k", "-g", "30",
                 "-c:a", "ac3", "-b:a", "192k", "-ar", "48000", "-ac", "2",
@@ -1266,23 +1363,30 @@ def _prepare_vod_thread(task_id, url, title):
                 out_file
             ])
 
-        print(f"[VOD] Processando '{clean_title}'...")
-        proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
+            print(f"[VOD] Processando stream '{clean_title}'...")
+            proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
 
-        time_pat = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
-        for line in proc.stderr:
-            m = time_pat.search(line)
-            if m:
-                hrs, mins, secs = int(m.group(1)), int(m.group(2)), float(m.group(3))
-                cur_secs = hrs * 3600 + mins * 60 + secs
-                if duration > 0:
-                    pct = min(98, max(10, int((cur_secs / duration) * 100)))
+            time_pat = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
+            err_lines = []
+            for line in proc.stderr:
+                err_lines.append(line.strip())
+                if len(err_lines) > 20:
+                    err_lines.pop(0)
+                m = time_pat.search(line)
+                if m:
+                    hrs, mins, secs = int(m.group(1)), int(m.group(2)), float(m.group(3))
+                    cur_secs = hrs * 3600 + mins * 60 + secs
+                    if duration > 0:
+                        pct = min(98, max(10, int((cur_secs / duration) * 100)))
+                    else:
+                        pct = min(95, 10 + int(cur_secs / 30))
                     with VOD_TASKS_LOCK:
                         task["progress"] = pct
 
-        proc.wait()
-        if proc.returncode != 0:
-            raise RuntimeError(f"FFmpeg falhou com código {proc.returncode}")
+            proc.wait()
+            if proc.returncode != 0:
+                err_snippet = " ".join([l for l in err_lines if "error" in l.lower() or "failed" in l.lower()][-3:])
+                raise RuntimeError(f"FFmpeg falhou ({proc.returncode}): {err_snippet or 'erro na conversão'}")
 
         file_size = os.path.getsize(out_file)
         if file_size < 10000:
@@ -1301,12 +1405,14 @@ def _prepare_vod_thread(task_id, url, title):
             task["template_path"] = out_tmpl
             task["file_size"] = file_size
             task["display_name"] = fat_name
+            save_vod_tasks()
         print(f"[✓] VOD pronto: {clean_title} ({file_size / (1024*1024):.1f} MB)")
     except Exception as e:
         print(f"[!] Erro no VOD {task_id}: {e}")
         with VOD_TASKS_LOCK:
             task["status"] = "error"
             task["error"] = str(e)
+            save_vod_tasks()
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -2025,6 +2131,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "error": None,
                 "created_at": time.time()
             }
+            save_vod_tasks()
 
         threading.Thread(target=_prepare_vod_thread, args=(task_id, url, title), daemon=True).start()
 
@@ -3028,6 +3135,196 @@ class RequestHandler(BaseHTTPRequestHandler):
                 btn.disabled = false;
                 btnText.innerText = "Transmitir";
                 btnSpin.style.display = "none";
+            }}
+        }}
+
+        let activeVodTaskId = null;
+
+        async function prepareVOD() {{
+            const input = document.getElementById('yt-url-input');
+            const url = (input.value || '').trim();
+            if (!url) {{
+                showToast("Por favor, cole um link de vídeo ou filme.");
+                return;
+            }}
+
+            const pin = getAuthPin();
+            const btn = document.getElementById('btn-vod-prep');
+            const btnText = document.getElementById('btn-vod-prep-text');
+            const btnSpin = document.getElementById('btn-vod-prep-spin');
+
+            btn.disabled = true;
+            btnText.innerText = "Preparando...";
+            btnSpin.style.display = "inline-block";
+
+            try {{
+                const res = await fetch('/api/vod/prepare', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'X-Auth-PIN': pin
+                    }},
+                    body: JSON.stringify({{ url: url, pin: pin }})
+                }});
+
+                if (res.status === 401) {{
+                    localStorage.removeItem('tv_pin');
+                    showToast("PIN incorreto.");
+                    return;
+                }}
+
+                const data = await res.json();
+                if (data.success && data.task_id) {{
+                    activeVodTaskId = data.task_id;
+                    showToast("Preparando vídeo com áudio AC3 para a TV...");
+                    input.value = "";
+                    pollVODStatus();
+                }} else {{
+                    showToast(data.error || "Erro ao iniciar preparação do filme.");
+                }}
+            }} catch (e) {{
+                showToast("Erro ao conectar com o servidor.");
+            }} finally {{
+                btn.disabled = false;
+                btnText.innerText = "🎬 Preparar Cinema (Seek/Pause)";
+                btnSpin.style.display = "none";
+            }}
+        }}
+
+        async function pollVODStatus() {{
+            try {{
+                const res = await fetch('/api/vod/status');
+                const data = await res.json();
+                const box = document.getElementById('vod-status-box');
+                const titleEl = document.getElementById('vod-movie-title');
+                const badgeEl = document.getElementById('vod-status-badge');
+                const barEl = document.getElementById('vod-progress-bar');
+                const btnPlay = document.getElementById('btn-vod-play');
+                const btnLive = document.getElementById('btn-vod-live');
+                const hintEl = document.getElementById('vod-hint');
+
+                if (!data.tasks || data.tasks.length === 0) {{
+                    box.style.display = 'none';
+                    return;
+                }}
+
+                let task = null;
+                if (data.active_vod) {{
+                    task = data.tasks.find(t => t.id === data.active_vod);
+                }}
+                if (!task && activeVodTaskId) {{
+                    task = data.tasks.find(t => t.id === activeVodTaskId);
+                }}
+                if (!task) {{
+                    task = data.tasks[data.tasks.length - 1];
+                }}
+
+                if (!task) {{
+                    box.style.display = 'none';
+                    return;
+                }}
+
+                activeVodTaskId = task.id;
+                box.style.display = 'block';
+                titleEl.innerText = task.display_name || task.id;
+
+                if (task.status === 'processing') {{
+                    const pct = task.progress || 5;
+                    badgeEl.innerText = `${{pct}}%`;
+                    badgeEl.style.background = '#2563eb';
+                    barEl.style.width = `${{pct}}%`;
+                    barEl.style.background = '#e50914';
+                    btnPlay.style.display = 'none';
+                    btnLive.style.display = 'none';
+                    hintEl.innerText = 'Convertendo e indexando com áudio AC3 Samsung...';
+                }} else if (task.status === 'ready') {{
+                    barEl.style.width = '100%';
+                    if (data.active_vod === task.id) {{
+                        badgeEl.innerText = 'Transmitindo no ConnectShare';
+                        badgeEl.style.background = '#e50914';
+                        barEl.style.background = '#e50914';
+                        btnPlay.style.display = 'none';
+                        btnLive.style.display = 'inline-block';
+                        hintEl.innerText = `Tocando na TV: "${{task.display_name}}". Use Pause/Seek à vontade!`;
+                    }} else {{
+                        badgeEl.innerText = 'Pronto para TV';
+                        badgeEl.style.background = '#16a34a';
+                        barEl.style.background = '#16a34a';
+                        btnPlay.style.display = 'inline-block';
+                        btnPlay.innerText = `▶️ Assistir "${{task.display_name}}" na TV`;
+                        btnLive.style.display = 'none';
+                        hintEl.innerText = 'Clique para enviar à TV com suporte total a Pause e Seek.';
+                    }}
+                }} else if (task.status === 'error') {{
+                    badgeEl.innerText = 'Erro';
+                    badgeEl.style.background = '#dc2626';
+                    barEl.style.width = '100%';
+                    barEl.style.background = '#dc2626';
+                    btnPlay.style.display = 'none';
+                    btnLive.style.display = 'none';
+                    hintEl.innerText = task.error || 'Falha ao processar arquivo.';
+                }}
+            }} catch (e) {{}}
+        }}
+
+        async function playVOD() {{
+            if (!activeVodTaskId) return;
+            const pin = getAuthPin();
+            const btnPlay = document.getElementById('btn-vod-play');
+            btnPlay.disabled = true;
+            btnPlay.innerText = "Alternando TV...";
+
+            try {{
+                const res = await fetch('/api/vod/play', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'X-Auth-PIN': pin
+                    }},
+                    body: JSON.stringify({{ task_id: activeVodTaskId, pin: pin }})
+                }});
+                const data = await res.json();
+                if (data.success) {{
+                    showToast(`TV atualizada! Abra o ConnectShare e selecione "${{data.display_name || 'Filme'}}"`);
+                    pollVODStatus();
+                }} else {{
+                    showToast(data.error || "Erro ao iniciar VOD na TV.");
+                }}
+            }} catch (e) {{
+                showToast("Erro de comunicação com o servidor.");
+            }} finally {{
+                btnPlay.disabled = false;
+            }}
+        }}
+
+        async function returnLive() {{
+            const pin = getAuthPin();
+            const btnLive = document.getElementById('btn-vod-live');
+            btnLive.disabled = true;
+            btnLive.innerText = "Voltando para Ao Vivo...";
+
+            try {{
+                const res = await fetch('/api/vod/live', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'X-Auth-PIN': pin
+                    }},
+                    body: JSON.stringify({{ pin: pin }})
+                }});
+                const data = await res.json();
+                if (data.success) {{
+                    showToast("Retornando TV para Ao Vivo...");
+                    activeVodTaskId = null;
+                    pollVODStatus();
+                    updateStatus();
+                }} else {{
+                    showToast("Erro ao retornar para Live.");
+                }}
+            }} catch (e) {{
+                showToast("Erro de comunicação com o servidor.");
+            }} finally {{
+                btnLive.disabled = false;
             }}
         }}
 

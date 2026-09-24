@@ -13,7 +13,7 @@ services:
       - RESIDENTIAL_HTTP_PROXY=http://172.20.0.1:8118
       - RESIDENTIAL_SOCKS_PROXY=socks5h://172.20.0.1:1080
       - STREAM_RESOLUTION=1080p
-      - SLATE_GAP_THRESHOLD=8.0
+      - SLATE_GAP_THRESHOLD=3.0
 
 
     volumes:
@@ -26,6 +26,14 @@ services:
       - ./start_clean.sh:/app/start_clean.sh
       - ./slate.ts:/app/slate.ts
       - ./slate_1080p.ts:/app/slate_1080p.ts
+      - ./gen_template.py:/app/gen_template.py
+      - ./fuse_direct_arm32:/app/fuse_direct_arm32
+      - ./fuse_direct_arm64:/app/fuse_direct_arm64
+      - ./switch_vod.sh:/app/switch_vod.sh
+      - ./switch_live.sh:/app/switch_live.sh
+      - ./tv_watchdog.sh:/app/tv_watchdog.sh
+      - ./watch_writer.sh:/app/watch_writer.sh
+      - ./vod_cache:/app/vod_cache
     networks:
       - gateway_net
 

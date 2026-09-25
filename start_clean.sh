@@ -31,7 +31,10 @@ ln -s "$GADGET/functions/mass_storage.0" "$GADGET/configs/b.1/f1"
 [ -d "$GADGET/functions/ffs.adb" ] && ln -s "$GADGET/functions/ffs.adb" "$GADGET/configs/b.1/f2" 2>/dev/null || true
 
 echo "[i] Iniciando stream_writer..."
-nohup /data/data/com.termux/files/usr/bin/python3 /data/local/tmp/stream_writer.py 3112 https://tv.smre.run.place band-rio --fifo=/data/local/tmp/live_pipe >>/data/local/tmp/channel_stream.log 2>&1 &
+CH=$(/data/data/com.termux/files/usr/bin/python3 -c "import urllib.request,json; print(json.load(urllib.request.urlopen('https://tv.smre.run.place/api/status', timeout=3))['active_channel_id'])" 2>/dev/null)
+[ -z "$CH" ] && CH="studio-universal-br"
+echo "$CH" > /data/local/tmp/current_channel.txt
+nohup /data/data/com.termux/files/usr/bin/python3 /data/local/tmp/stream_writer.py 3112 https://tv.smre.run.place "$CH" --fifo=/data/local/tmp/live_pipe >>/data/local/tmp/channel_stream.log 2>&1 &
 nohup sh /data/local/tmp/watch_writer.sh >>/data/local/tmp/channel_stream.log 2>&1 &
 
 echo 500000 > /sys/class/power_supply/usb/current_max 2>/dev/null || true

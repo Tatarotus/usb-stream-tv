@@ -381,8 +381,9 @@ class SeamlessRestamper:
                             if is_video:
                                 if self.first_video_in_pts is None:
                                     self.first_video_in_pts = in_pts
-                                    self.video_pts_offset = wrap33(self.target_base_pts - in_pts)
-                                    self.pts_offset = self.video_pts_offset
+                                    if self.video_pts_offset is None:
+                                        self.video_pts_offset = wrap33(self.target_base_pts - in_pts)
+                                        self.pts_offset = self.video_pts_offset
                                     if self.first_audio_in_pts is not None:
                                         skew_in = signed_diff_33(self.first_audio_in_pts, in_pts)
                                         if abs(skew_in) <= OPERATIONAL_MAX_SKEW_TICKS:

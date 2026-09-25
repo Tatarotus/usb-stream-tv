@@ -1314,6 +1314,13 @@ def _prepare_vod_thread(task_id, url, title):
                 except Exception as e:
                     print(f"[*] resolve_youtube informativo falhou: {e}, prosseguindo para download direto...")
 
+                fat_name_preview = re.sub(r'[^a-zA-Z0-9 _-]', '', clean_title).strip()
+                fat_name_preview = (fat_name_preview[:26] or "FILME") + ".mp4"
+                with VOD_TASKS_LOCK:
+                    task["title"] = clean_title
+                    task["display_name"] = fat_name_preview
+                    save_vod_tasks()
+
                 yt_cmd = [
                     "yt-dlp",
                     "--no-warnings",
@@ -1347,18 +1354,46 @@ def _prepare_vod_thread(task_id, url, title):
                     raise RuntimeError(f"yt-dlp falhou com código {proc_yt.returncode}")
 
             # Transcode raw media with FFmpeg into 100% Samsung-compatible H.264 + AC3 stereo
-            cmd = [
-                "ffmpeg", "-y", "-i", raw_file,
-                "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
-                "-r", "30",
-                "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-level", "4.1",
-                "-b:v", "2600k", "-maxrate", "3000k", "-bufsize", "1800k", "-g", "30",
-                "-c:a", "ac3", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-                "-movflags", "+faststart",
-                "-f", "mp4",
-                out_file
-            ]
-            print(f"[VOD] Codificando para Samsung TV H.264/AC3 '{clean_title}'...")
+            can_copy_video = False
+            try:
+                probe_cmd = [
+                    "ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name,level,pix_fmt",
+                    "-of", "json", raw_file
+                ]
+                v_meta = json.loads(subprocess.check_output(probe_cmd, text=True))
+                st = (v_meta.get("streams") or [{}])[0]
+                codec = st.get("codec_name", "").lower()
+                pix = st.get("pix_fmt", "").lower()
+                lvl = int(st.get("level", 99))
+                if codec in ("h264", "avc1") and pix == "yuv420p" and lvl <= 41:
+                    can_copy_video = True
+            except Exception:
+                can_copy_video = False
+
+            if can_copy_video:
+                cmd = [
+                    "ffmpeg", "-y", "-i", raw_file,
+                    "-c:v", "copy",
+                    "-c:a", "ac3", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                    "-movflags", "+faststart",
+                    "-f", "mp4",
+                    out_file
+                ]
+                print(f"[VOD] Stream copy de vídeo direto + AC3 Samsung (modo ultra-rápido 90x) '{clean_title}'...")
+            else:
+                cmd = [
+                    "ffmpeg", "-y", "-i", raw_file,
+                    "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+                    "-r", "30",
+                    "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-level", "4.1",
+                    "-b:v", "2600k", "-maxrate", "3000k", "-bufsize", "1800k", "-g", "30",
+                    "-c:a", "ac3", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                    "-movflags", "+faststart",
+                    "-f", "mp4",
+                    out_file
+                ]
+                print(f"[VOD] Codificando para Samsung TV H.264/AC3 '{clean_title}'...")
             proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
             time_pat = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
             err_lines = []
@@ -1453,6 +1488,19 @@ def _prepare_vod_thread(task_id, url, title):
             task["status"] = "error"
             task["error"] = str(e)
             save_vod_tasks()
+
+def resume_interrupted_vod_tasks():
+    """Retoma automaticamente tarefas VOD que foram interrompidas por reinicialização."""
+    with VOD_TASKS_LOCK:
+        tasks = list(VOD_TASKS.values())
+    for t in tasks:
+        if t.get("status") in ("pending", "processing"):
+            tid = t.get("id")
+            url = t.get("url")
+            title = t.get("title")
+            if tid and url:
+                print(f"[*] Auto-retomando tarefa VOD: {tid} ({title})")
+                threading.Thread(target=_prepare_vod_thread, args=(tid, url, title), daemon=True).start()
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -1989,9 +2037,10 @@ class RequestHandler(BaseHTTPRequestHandler):
         }).encode("utf-8"))
 
     def handle_sync(self):
-        """Executa sincronização dos canais em segundo plano."""
+        """Executa sincronização dos canais e recarga de tarefas VOD em segundo plano."""
         def do_sync():
             try:
+                load_vod_tasks()
                 import sync_iptv
                 sync_iptv.sync()
                 CH_MGR.reload()
@@ -3480,6 +3529,10 @@ def run():
     print("==================================================")
     print(f" [✓] Servidor Multi-Canal Ativo em http://{HOST}:{PORT}")
     print("==================================================")
+    try:
+        resume_interrupted_vod_tasks()
+    except Exception as e:
+        print(f"[!] Erro ao retomar VODs: {e}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

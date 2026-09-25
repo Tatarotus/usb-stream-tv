@@ -227,39 +227,61 @@ def encode_pcr(pcr_val):
     b5 = ext & 0xFF
     return bytes([b0, b1, b2, b3, b4, b5])
 
+WRAP33_MOD = 1 << 33  # 8589934592 (limite de rollover de 33 bits do PTS/DTS em 90kHz)
+HALF_WRAP33 = 1 << 32  # 4294967296 (ponto de corte para signed delta circular)
+
+# O PCR MPEG-TS é composto por PCR_base (33 bits em 90kHz) e PCR_ext (9 bits em 27MHz, 0..299):
+# PCR = PCR_base * 300 + PCR_ext.
+# O ciclo completo do PCR_base corresponde a 2^33 ticks de 90kHz, ou seja, (2^33 * 300) ticks de 27MHz (~2.576.980.377.600 ticks).
+# PCR_MOD representa este período exato de repetição do PCR_base na escala de 27MHz,
+# garantindo que o rollover modular do PCR_base e do PTS ocorram em sincronia perfeita no espaço modular.
+PCR_MOD = (1 << 33) * 300  # 2576980377600 ticks a 27MHz
+
+# Operational A/V phase threshold (500 ms in 90kHz ticks).
+# Not an MPEG-TS spec or Samsung hardware spec, but our pipeline's operational
+# rule to distinguish normal GOP interleaving from upstream phase discontinuities.
+OPERATIONAL_MAX_SKEW_TICKS = 45000  # 500 ms
+
 def wrap33(v):
-    """33-bit timestamp wrap with windowed startup guard (per review).
-    A bare max(0, v) would freeze true 33-bit rollovers at 0: post-wrap
-    small values plus a ~-2^33 offset stay negative forever. Genuine
-    ring arithmetic involves values near +-2^33, so only clamp small
-    negatives (audio lead / B-frame jitter within 2s before epoch start);
-    everything else masks through untouched."""
-    v = int(v)
-    if -180000 <= v < 0:
-        return 0
-    return v & 0x1FFFFFFFF
+    """33-bit timestamp normalization in the ring [0, 2^33 - 1].
+    Strict modular ring arithmetic mod 2^33 is enforced without ad-hoc window clamps."""
+    return int(v) % WRAP33_MOD
 
 def wrap46(v):
-    """46-bit PCR equivalent of wrap33 (2s window = 54M at 27MHz)."""
-    v = int(v)
-    if -54000000 <= v < 0:
-        return 0
-    return v & 0x1FFFFFFFFFFFF
+    """
+    Normalização modular do PCR a 27MHz no período de repetição do PCR_base: [0, 2^33 * 300 - 1].
+    Preserva a relação síncrona com o espaço modular de 33 bits do PTS (onde 1 tick PTS = 300 ticks PCR).
+    """
+    return int(v) % PCR_MOD
+
+def signed_diff_33(a, b):
+    """
+    Calculates modular signed difference (a - b) in the 33-bit ring [-2^32, 2^32 - 1].
+    Used to safely compare timestamps across 33-bit rollover boundaries without naive integer subtraction.
+    """
+    diff = (int(a) - int(b)) % WRAP33_MOD
+    if diff >= HALF_WRAP33:
+        diff -= WRAP33_MOD
+    return diff
 
 class SeamlessRestamper:
     """
-    Normalizador de fluxo MPEG-TS em tempo real.
+    Normalizador de fluxo MPEG-TS em tempo real com preservação de fase A/V e relógio mestre.
     Garante que timestamps (PTS, DTS, PCR) e contadores de continuidade (CC)
     avancem estritamente de forma contínua e crescente mesmo durante a troca de canais,
     sem salto temporal para trás, sem desync de áudio AC3 e preservando a ordem dos B-frames.
-    O fluxo de vídeo é o relógio mestre (master clock); o áudio acompanha o offset mestre
-    sem causar mutações ou oscilações no relógio geral.
+    O fluxo de vídeo é o relógio mestre (master clock); o áudio preserva a relação temporal original
+    se o skew estiver dentro do limiar operacional (|Δ| <= 500ms), ou realinha para uma nova fase
+    coerente caso o upstream apresente descontinuidade patológica (|Δ| > 500ms).
     """
     def __init__(self):
         self.rem = bytearray()
-        self.pts_offset = None  # None until first video PTS anchors the epoch
+        self.video_pts_offset = None
+        self.audio_pts_offset = None
+        self.pts_offset = None  # Alias para video_pts_offset (compatibilidade)
         self.max_pts_seen = 90000
-        self.first_pts_in_epoch = None
+        self.first_video_in_pts = None
+        self.first_audio_in_pts = None
         self.target_base_pts = 270000
         self.cc_map = {}
         self.last_out_video_pts = None
@@ -267,21 +289,27 @@ class SeamlessRestamper:
         self.last_out_audio_pts = None
 
     def reset_epoch(self):
-        self.first_pts_in_epoch = None
+        self.first_video_in_pts = None
+        self.first_audio_in_pts = None
         self.target_base_pts = 270000
         self.max_pts_seen = 90000
         self.last_out_video_pts = None
         self.prev_in_video_pts = None
         self.last_out_audio_pts = None
+        self.video_pts_offset = None
+        self.audio_pts_offset = None
         self.pts_offset = None
         log_event("PTS_EPOCH_RESET (target_base_pts=270000)")
 
     def start_new_channel(self):
-        self.first_pts_in_epoch = None
-        self.target_base_pts = self.max_pts_seen + 3000
+        self.first_video_in_pts = None
+        self.first_audio_in_pts = None
+        self.target_base_pts = wrap33(self.max_pts_seen + 3000)
         self.last_out_video_pts = None
         self.prev_in_video_pts = None
         self.last_out_audio_pts = None
+        self.video_pts_offset = None
+        self.audio_pts_offset = None
         self.pts_offset = None
 
     def process_chunk(self, data):
@@ -327,9 +355,10 @@ class SeamlessRestamper:
                     base = (pcr_bytes[0] << 25) | (pcr_bytes[1] << 17) | (pcr_bytes[2] << 9) | (pcr_bytes[3] << 1) | (pcr_bytes[4] >> 7)
                     ext = ((pcr_bytes[4] & 0x01) << 8) | pcr_bytes[5]
                     in_pcr = base * 300 + ext
-                    if self.pts_offset is None:
-                        self.pts_offset = self.target_base_pts - base
-                    out_pcr = wrap46(in_pcr + (self.pts_offset * 300))
+                    if self.video_pts_offset is None:
+                        self.video_pts_offset = wrap33(self.target_base_pts - base)
+                        self.pts_offset = self.video_pts_offset
+                    out_pcr = wrap46(in_pcr + (self.video_pts_offset * 300))
                     out[i+6:i+12] = encode_pcr(out_pcr)
 
             # Normalização de PTS e DTS (Áudio MPEG 0xC0-DF, Vídeo 0xE0-EF, Áudio AC3 Dolby 0xBD)
@@ -347,66 +376,103 @@ class SeamlessRestamper:
                             b = out[p_pos:p_pos+5]
                             in_pts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
                             
-                            # O primeiro pacote (áudio ou vídeo) estabelece a âncora do offset para a nova época
-                            if self.first_pts_in_epoch is None:
-                                self.first_pts_in_epoch = in_pts
-                                self.pts_offset = self.target_base_pts - in_pts
+
 
                             if is_video:
-                                if self.pts_offset is not None:
-                                    out_pts = wrap33(in_pts + self.pts_offset)
-                                    if out_pts > self.max_pts_seen:
-                                        self.max_pts_seen = out_pts
+                                if self.first_video_in_pts is None:
+                                    self.first_video_in_pts = in_pts
+                                    self.video_pts_offset = wrap33(self.target_base_pts - in_pts)
+                                    self.pts_offset = self.video_pts_offset
+                                    if self.first_audio_in_pts is not None:
+                                        skew_in = signed_diff_33(self.first_audio_in_pts, in_pts)
+                                        if abs(skew_in) <= OPERATIONAL_MAX_SKEW_TICKS:
+                                            self.audio_pts_offset = self.video_pts_offset
+
+                                out_pts = wrap33(in_pts + self.video_pts_offset)
+                                if signed_diff_33(out_pts, self.max_pts_seen) > 0:
+                                    self.max_pts_seen = out_pts
 
                                     if self.prev_in_video_pts is not None:
-                                        dra = in_pts - self.prev_in_video_pts
-                                        if dra < -(1 << 32) or dra > (1 << 32):
-                                            self.pts_offset = (self.last_out_video_pts + 3000) - in_pts if self.last_out_video_pts is not None else (self.target_base_pts - in_pts)
-                                            out_pts = wrap33(in_pts + self.pts_offset)
-                                            if out_pts > self.max_pts_seen:
-                                                self.max_pts_seen = out_pts
+                                        dra = signed_diff_33(in_pts, self.prev_in_video_pts)
+                                        if abs(dra) > (1 << 31):
+                                            base_ref = self.last_out_video_pts if self.last_out_video_pts is not None else self.target_base_pts
+                                            self.video_pts_offset = wrap33(base_ref + 3000 - in_pts)
+                                            self.pts_offset = self.video_pts_offset
+                                            out_pts = wrap33(in_pts + self.video_pts_offset)
                                             log_event(f"PTS_REBASE dra={dra/90000:+.0f}s")
                                     self.prev_in_video_pts = in_pts
 
                                     if self.last_out_video_pts is not None:
-                                        jump = out_pts - self.last_out_video_pts
+                                        jump = signed_diff_33(out_pts, self.last_out_video_pts)
                                         if jump < -45000 or jump > 5400000:
                                             log_event(f"PTS_JUMP {jump/90000:+.1f}s (out_pts={out_pts})")
                                         if jump < -90000 or jump > 450000:
                                             # Re-ancora diretamente em in_pts sem absorver artefatos de wrap 33-bit
-                                            self.pts_offset = (self.last_out_video_pts + 3000) - in_pts
-                                            out_pts = wrap33(in_pts + self.pts_offset)
-                                            if out_pts > self.max_pts_seen:
-                                                self.max_pts_seen = out_pts
+                                            self.video_pts_offset = wrap33(self.last_out_video_pts + 3000 - in_pts)
+                                            self.pts_offset = self.video_pts_offset
+                                            out_pts = wrap33(in_pts + self.video_pts_offset)
+
                                     self.last_out_video_pts = out_pts
+                                    if signed_diff_33(out_pts, self.max_pts_seen) > 0:
+                                        self.max_pts_seen = out_pts
+
                                     out[p_pos:p_pos+5] = encode_ts_timestamp(out_pts, 3 if dts_flag else 2)
 
                                     if dts_flag and p_pos + 10 <= i + 188:
                                         b = out[p_pos+5:p_pos+10]
                                         in_dts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
-                                        out_dts = wrap33(in_dts + self.pts_offset)
+                                        out_dts = wrap33(in_dts + self.video_pts_offset)
                                         out[p_pos+5:p_pos+10] = encode_ts_timestamp(out_dts, 1)
 
                             elif is_audio:
-                                # O áudio acompanha o offset mestre
-                                if self.pts_offset is not None:
-                                    out_pts = wrap33(in_pts + self.pts_offset)
-                                    # Proteção estrita de monotonicidade: o decodificador de hardware da Samsung
-                                    # entra em mute se o PTS do áudio recuar ou estagnar em relação ao último frame
-                                    if self.last_out_audio_pts is not None and out_pts <= self.last_out_audio_pts:
-                                        out_pts = wrap33(self.last_out_audio_pts + 2880)
-                                    if out_pts > self.max_pts_seen:
-                                        self.max_pts_seen = out_pts
-                                    self.last_out_audio_pts = out_pts
-                                    out[p_pos:p_pos+5] = encode_ts_timestamp(out_pts, 3 if dts_flag else 2)
+                                # Relógio mestre é o vídeo
+                                if self.audio_pts_offset is None:
+                                    self.first_audio_in_pts = in_pts
+                                    if self.first_video_in_pts is not None and self.video_pts_offset is not None:
+                                        skew_in = signed_diff_33(in_pts, self.first_video_in_pts)
+                                        if abs(skew_in) <= OPERATIONAL_MAX_SKEW_TICKS:
+                                            # Passo B2: Skew dentro do limiar operacional (<= 500ms)
+                                            # Preserva a relação temporal original de upstream
+                                            self.audio_pts_offset = self.video_pts_offset
+                                        else:
+                                            # Passo B3: Descontinuidade de fase do upstream (|skew| > 500ms)
+                                            # Inicia nova fase A/V coerente ancorada ao target_base_pts
+                                            self.audio_pts_offset = wrap33(self.target_base_pts - in_pts)
+                                            log_event(f"A/V_PHASE_REALIGN: in_skew={skew_in/90000:+.3f}s -> realigned audio to target_base_pts")
+                                    else:
+                                        # Áudio chegou antes do vídeo nesta época: ancora provisoriamente
+                                        self.audio_pts_offset = wrap33(self.target_base_pts - in_pts)
 
-                                    if dts_flag and p_pos + 10 <= i + 188:
-                                        b = out[p_pos+5:p_pos+10]
-                                        in_dts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
-                                        out_dts = wrap33(in_dts + self.pts_offset)
-                                        if self.last_out_audio_pts is not None and out_dts <= self.last_out_audio_pts:
-                                            out_dts = out_pts
-                                        out[p_pos+5:p_pos+10] = encode_ts_timestamp(out_dts, 1)
+                                out_pts = wrap33(in_pts + self.audio_pts_offset)
+
+                                # Proteção contínua de integridade de skew em mid-stream:
+                                if self.last_out_video_pts is not None:
+                                    curr_skew = signed_diff_33(out_pts, self.last_out_video_pts)
+                                    if abs(curr_skew) > OPERATIONAL_MAX_SKEW_TICKS:
+                                        self.audio_pts_offset = wrap33(self.last_out_video_pts - in_pts)
+                                        out_pts = wrap33(in_pts + self.audio_pts_offset)
+                                        log_event(f"A/V_MIDSTREAM_REALIGN: curr_skew={curr_skew/90000:+.3f}s -> realigned audio")
+
+                                # Proteção estrita de monotonicidade com signed_diff_33
+                                if self.last_out_audio_pts is not None:
+                                    diff_last = signed_diff_33(out_pts, self.last_out_audio_pts)
+                                    if diff_last <= 0:
+                                        out_pts = wrap33(self.last_out_audio_pts + 2880)
+
+                                if signed_diff_33(out_pts, self.max_pts_seen) > 0:
+                                    self.max_pts_seen = out_pts
+
+                                self.last_out_audio_pts = out_pts
+                                out[p_pos:p_pos+5] = encode_ts_timestamp(out_pts, 3 if dts_flag else 2)
+
+                                if dts_flag and p_pos + 10 <= i + 188:
+                                    b = out[p_pos+5:p_pos+10]
+                                    in_dts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
+                                    out_dts = wrap33(in_dts + self.audio_pts_offset)
+                                    diff_dts = signed_diff_33(out_dts, self.last_out_audio_pts)
+                                    if diff_dts <= 0:
+                                        out_dts = out_pts
+                                    out[p_pos+5:p_pos+10] = encode_ts_timestamp(out_dts, 1)
 
         return bytes(out)
 

@@ -531,12 +531,14 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_
 
         if ".mp4" in url_lower or ".mkv" in url_lower or is_googlevideo:
             cmd.extend([
+                "-rw_timeout", "10000000",
                 "-reconnect", "1",
                 "-reconnect_streamed", "1",
                 "-reconnect_delay_max", "5"
             ])
         else:
             cmd.extend([
+                "-rw_timeout", "10000000",
                 "-allowed_segment_extensions", "ALL",
                 "-extension_picky", "0",
                 "-reconnect", "1", "-reconnect_streamed", "1",
@@ -557,6 +559,7 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_
     # Input 1: Áudio DASH separado (YouTube 1080p)
     if audio_url:
         cmd.extend([
+            "-rw_timeout", "10000000",
             "-user_agent", "Mozilla/5.0",
             "-reconnect", "1",
             "-reconnect_streamed", "1",
@@ -785,18 +788,20 @@ class StreamHub:
     def _broadcast(self, data):
         if not data:
             return
-        dead = []
         for q in list(self.subscribers):
             try:
                 q.put_nowait(data)
             except queue.Full:
+                # Buffer cheio por lag transitório: descarta o chunk mais antigo
+                # para que o leitor avance sem travar, preservando a conexão do assinante!
                 try:
                     q.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
                     q.put_nowait(data)
-                except Exception:
-                    dead.append(q)
-        for d in dead:
-            self.subscribers.discard(d)
+                except queue.Full:
+                    pass
 
     def _handle_proc_exit(self, p, rc):
         if p != self.proc or self.switching or self.in_standby:
@@ -960,6 +965,19 @@ class StreamHub:
             # Se já estamos em modo Slate (por desconexão ou gap longo anterior),
             # continua transmitindo os chunks do slate compassados até que dados reais voltem!
             if self.slate_mode:
+                # Watchdog de recuperação: se estamos em slate há mais de 15s e o processo upstream
+                # ainda consta como vivo (ex: socket TCP congelado pela operadora sem EOF),
+                # força a finalização do FFmpeg para disparar reconexão imediata!
+                if self.slate_start_time and (time.time() - self.slate_start_time > 15.0):
+                    p = self.proc
+                    if p and p.poll() is None:
+                        print("[!] Upstream travado em Slate por >15s. Forçando reinício do FFmpeg...")
+                        log_event("WATCHDOG_FFMPEG_KILL (stuck in slate >15s)")
+                        try:
+                            p.kill()
+                        except Exception:
+                            pass
+
                 if self.slate_chunks:
                     now = time.time()
                     if now - last_slate_broadcast >= next_slate_pace:
@@ -1593,9 +1611,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         q = HUB.subscribe()
         try:
             while True:
-                chunk = q.get()
-                self.wfile.write(chunk)
-        except (BrokenPipeError, ConnectionResetError):
+                try:
+                    chunk = q.get(timeout=5.0)
+                    self.wfile.write(chunk)
+                except queue.Empty:
+                    continue
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
             pass
         finally:
             HUB.unsubscribe(q)

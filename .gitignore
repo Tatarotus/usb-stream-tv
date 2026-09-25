@@ -4,6 +4,8 @@
 *.ts
 *.bin
 !fat_template.bin
+test.txt
+test_*.json
 
 # Logs & PIDs
 *.log

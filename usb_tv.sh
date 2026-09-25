@@ -87,7 +87,7 @@ start_stream() {
   fi
 
   CH=$(cat /data/local/tmp/current_channel.txt 2>/dev/null)
-  [ -z "$CH" ] && CH="globo-morena-dourados"
+  [ -z "$CH" ] && CH="band-rio"
 
   echo "[+] Iniciando gravador: $SERVER_URL (Canal: $CH)..."
   nohup $PYTHON /data/local/tmp/stream_writer.py 3112 "$SERVER_URL" "$CH" --fifo=/data/local/tmp/live_pipe >>/data/local/tmp/channel_stream.log 2>&1 &

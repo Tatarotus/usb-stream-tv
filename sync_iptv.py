@@ -16,7 +16,8 @@ PREMIUM_FILE = os.path.join(CONFIG_DIR, "working-premium.json")
 META = {
     # TV Aberta (13)
     "tv-gazeta-sp": {"name": "TV Gazeta SP", "quality": "1080p", "category": "TV Aberta", "logo": "📺"},
-    "globo-morena-dourados": {"name": "Rede Globo (TV Morena)", "quality": "720p", "category": "TV Aberta", "logo": "🌐"},
+    "band-rio": {"name": "Band Rio", "quality": "1080p", "category": "TV Aberta", "logo": "📺"},
+    "globo-rj": {"name": "Globo RJ", "quality": "1080p", "category": "TV Aberta", "logo": "🌐"},
     "rede-tv-nacional": {"name": "RedeTV! Nacional", "quality": "720p", "category": "TV Aberta", "logo": "📺"},
     "redetv-parana": {"name": "RedeTV! Paraná", "quality": "1080p", "category": "TV Aberta", "logo": "📺"},
     "rede-brasil": {"name": "Rede Brasil (RBTV)", "quality": "1080p", "category": "TV Aberta", "logo": "📺"},

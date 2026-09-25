@@ -17,14 +17,23 @@
     "logo": "📺",
     "description": "TV aberta generalista de São Paulo. Jornalismo (Gazeta Esportiva, Jornal da Gazeta), variedades, culinária e esportes. Rede aberta tradicional."
   },
-  "globo-morena-dourados": {
-    "id": "globo-morena-dourados",
-    "name": "Rede Globo (TV Morena)",
-    "quality": "720p",
+  "band-rio": {
+    "id": "band-rio",
+    "name": "Band Rio",
+    "quality": "1080p",
     "category": "TV Aberta",
-    "url": "https://media2.cdntvms.com.br/tv_morena_dorados/index.m3u8",
+    "url": "http://studut.shop:80/live/0939303360/3811610453/207177.m3u8",
+    "logo": "📺",
+    "description": "Band Rio de Janeiro (capital e região metropolitana). Jornalismo, esporte e entretenimento."
+  },
+  "globo-rj": {
+    "id": "globo-rj",
+    "name": "Globo RJ",
+    "quality": "1080p",
+    "category": "TV Aberta",
+    "url": "http://studut.shop:80/live/0939303360/3811610453/10006.m3u8",
     "logo": "🌐",
-    "description": "Afiliada Globo no Mato Grosso do Sul (Três Lagoas/Dourados). Retransmite grade nacional Globo + jornalismo local Morena."
+    "description": "Rede Globo Rio de Janeiro (capital). Jornalismo e entretenimento da grade nacional e regional."
   },
   "rede-tv-nacional": {
     "id": "rede-tv-nacional",

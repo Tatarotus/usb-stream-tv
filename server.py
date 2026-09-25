@@ -96,12 +96,20 @@ SMART_GROUPS = [
 ]
 
 DEFAULT_CHANNELS = {
-    "globo-morena-dourados": {
-        "id": "globo-morena-dourados",
-        "name": "Rede Globo (TV Morena)",
-        "quality": "720p",
+    "band-rio": {
+        "id": "band-rio",
+        "name": "Band Rio",
+        "quality": "1080p",
         "category": "TV Aberta",
-        "url": "https://media2.cdntvms.com.br/tv_morena_dorados/index.m3u8",
+        "url": "http://studut.shop:80/live/0939303360/3811610453/207177.m3u8",
+        "logo": "📺"
+    },
+    "globo-rj": {
+        "id": "globo-rj",
+        "name": "Globo RJ",
+        "quality": "1080p",
+        "category": "TV Aberta",
+        "url": "http://studut.shop:80/live/0939303360/3811610453/10006.m3u8",
         "logo": "🌐"
     }
 }
@@ -637,12 +645,13 @@ class StreamHub:
         self.restamper = SeamlessRestamper()
         
         initial_ch = (
-            CH_MGR.get_channel("globo-morena-dourados")
+            CH_MGR.get_channel("band-rio")
+            or CH_MGR.get_channel("globo-rj")
             or CH_MGR.get_channel("test-timer")
             or list(CH_MGR.get_all().values())[0]
         )
-        self.current_channel_id = initial_ch.get("id", "globo-morena-dourados")
-        self.current_channel_name = initial_ch.get("name", "Rede Globo (TV Morena)")
+        self.current_channel_id = initial_ch.get("id", "band-rio")
+        self.current_channel_name = initial_ch.get("name", "Band Rio")
         self.current_url = initial_ch.get("url", "")
         self.current_audio_url = None
         self.current_is_live = False
@@ -835,7 +844,7 @@ class StreamHub:
                 return
 
             # Terminou normalmente ou esgotou tentativas de reconexão
-            fallback_ch = self.fallback_channel or getattr(self, "last_live_channel", None) or "globo-morena-dourados"
+            fallback_ch = self.fallback_channel or getattr(self, "last_live_channel", None) or "band-rio"
             ch = CH_MGR.get_channel(fallback_ch)
             reason = "finalizada" if finished_naturally else f"interrompida após {self.temporary_retries} tentativas"
             print(f"[✓] Transmissão temporária {reason} ({self.current_channel_name}, rc={rc}). Retornando à TV ao vivo ({fallback_ch})...")
@@ -1161,7 +1170,7 @@ class StreamHub:
                     getattr(self, "last_live_channel", None)
                     or (self.current_channel_id if not self.current_is_temporary else None)
                     or self.fallback_channel
-                    or "globo-morena-dourados"
+                    or "band-rio"
                 )
 
                 print(f"\n[▶️] INICIANDO TRANSMISSÃO DO YOUTUBE: {target_name} (via_proxy={use_proxy})")
@@ -2889,7 +2898,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             if (savedFavs) {{
                 favorites = new Set(JSON.parse(savedFavs));
             }} else {{
-                favorites = new Set(['globo-morena-dourados', 'record-news', 'tv-cultura-sp', 'studio-universal-br', 'sony-channel-br', 'espn-mirror-a07z', 'espn4-mirror-a07n']);
+                favorites = new Set(['band-rio', 'globo-rj', 'record-news', 'tv-cultura-sp', 'studio-universal-br', 'sony-channel-br', 'espn-mirror-a07z', 'espn4-mirror-a07n']);
                 localStorage.setItem('tv_favs_v3', JSON.stringify(Array.from(favorites)));
             }}
         }} catch(e) {{}}

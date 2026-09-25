@@ -25,7 +25,7 @@ struct Channel {
 };
 
 static struct Channel channels[] = {
-    {"01 - REDE GLOBO.ts",        "globo-morena-dourados", 1560576ULL,   62373888ULL,   3048},
+    {"01 - REDE GLOBO.ts",        "globo-rj",              1560576ULL,   62373888ULL,   3048},
     {"02 - RECORD NEWS.ts",        "record-news",          62373888ULL,  123187200ULL, 121824},
     {"03 - TV CULTURA.ts",         "tv-cultura-sp",        123187200ULL, 184000512ULL, 240600},
     {"04 - REDETV NACIONAL.ts",    "rede-tv-nacional",     184000512ULL, 244813824ULL, 359376},

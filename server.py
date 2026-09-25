@@ -389,40 +389,37 @@ class SeamlessRestamper:
                                             self.audio_pts_offset = self.video_pts_offset
 
                                 out_pts = wrap33(in_pts + self.video_pts_offset)
+                                if self.prev_in_video_pts is not None:
+                                    dra = signed_diff_33(in_pts, self.prev_in_video_pts)
+                                    if abs(dra) > (1 << 31):
+                                        base_ref = self.last_out_video_pts if self.last_out_video_pts is not None else self.target_base_pts
+                                        self.video_pts_offset = wrap33(base_ref + 3000 - in_pts)
+                                        self.pts_offset = self.video_pts_offset
+                                        out_pts = wrap33(in_pts + self.video_pts_offset)
+                                        log_event(f"PTS_REBASE dra={dra/90000:+.0f}s")
+                                self.prev_in_video_pts = in_pts
+
+                                if self.last_out_video_pts is not None:
+                                    jump = signed_diff_33(out_pts, self.last_out_video_pts)
+                                    if jump < -45000 or jump > 5400000:
+                                        log_event(f"PTS_JUMP {jump/90000:+.1f}s (out_pts={out_pts})")
+                                    if jump < -90000 or jump > 450000:
+                                        # Re-ancora diretamente em in_pts sem absorver artefatos de wrap 33-bit
+                                        self.video_pts_offset = wrap33(self.last_out_video_pts + 3000 - in_pts)
+                                        self.pts_offset = self.video_pts_offset
+                                        out_pts = wrap33(in_pts + self.video_pts_offset)
+
+                                self.last_out_video_pts = out_pts
                                 if signed_diff_33(out_pts, self.max_pts_seen) > 0:
                                     self.max_pts_seen = out_pts
 
-                                    if self.prev_in_video_pts is not None:
-                                        dra = signed_diff_33(in_pts, self.prev_in_video_pts)
-                                        if abs(dra) > (1 << 31):
-                                            base_ref = self.last_out_video_pts if self.last_out_video_pts is not None else self.target_base_pts
-                                            self.video_pts_offset = wrap33(base_ref + 3000 - in_pts)
-                                            self.pts_offset = self.video_pts_offset
-                                            out_pts = wrap33(in_pts + self.video_pts_offset)
-                                            log_event(f"PTS_REBASE dra={dra/90000:+.0f}s")
-                                    self.prev_in_video_pts = in_pts
+                                out[p_pos:p_pos+5] = encode_ts_timestamp(out_pts, 3 if dts_flag else 2)
 
-                                    if self.last_out_video_pts is not None:
-                                        jump = signed_diff_33(out_pts, self.last_out_video_pts)
-                                        if jump < -45000 or jump > 5400000:
-                                            log_event(f"PTS_JUMP {jump/90000:+.1f}s (out_pts={out_pts})")
-                                        if jump < -90000 or jump > 450000:
-                                            # Re-ancora diretamente em in_pts sem absorver artefatos de wrap 33-bit
-                                            self.video_pts_offset = wrap33(self.last_out_video_pts + 3000 - in_pts)
-                                            self.pts_offset = self.video_pts_offset
-                                            out_pts = wrap33(in_pts + self.video_pts_offset)
-
-                                    self.last_out_video_pts = out_pts
-                                    if signed_diff_33(out_pts, self.max_pts_seen) > 0:
-                                        self.max_pts_seen = out_pts
-
-                                    out[p_pos:p_pos+5] = encode_ts_timestamp(out_pts, 3 if dts_flag else 2)
-
-                                    if dts_flag and p_pos + 10 <= i + 188:
-                                        b = out[p_pos+5:p_pos+10]
-                                        in_dts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
-                                        out_dts = wrap33(in_dts + self.video_pts_offset)
-                                        out[p_pos+5:p_pos+10] = encode_ts_timestamp(out_dts, 1)
+                                if dts_flag and p_pos + 10 <= i + 188:
+                                    b = out[p_pos+5:p_pos+10]
+                                    in_dts = (((b[0] & 0x0E) << 29) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
+                                    out_dts = wrap33(in_dts + self.video_pts_offset)
+                                    out[p_pos+5:p_pos+10] = encode_ts_timestamp(out_dts, 1)
 
                             elif is_audio:
                                 # Relógio mestre é o vídeo

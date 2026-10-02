@@ -1,0 +1,152 @@
+# Arquitetura do Sistema USB-Stream-TV
+
+Este documento descreve detalhadamente a arquitetura de engenharia do **USB-Stream-TV**, cobrindo o motor de emulação de pendrive USB, o driver em espaço de usuário (FUSE NTFS), o subsistema anti-cache de hardware e o pipeline de transcodificação.
+
+---
+
+## 1. Visão Geral da Topologia
+
+O sistema é dividido em três camadas desacopladas que se comunicam através de protocolos padrão:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1. NUVEM / SERVIDOR CENTRAL (Oracle Cloud VPS)              │
+│    - Servidor HTTP assíncrono (FastAPI / Python 3.11)       │
+│    - Gerenciador de Subprocessos FFmpeg sob demanda         │
+│    - Normalizador de Áudio (AC-3 48kHz Dolby Digital)       │
+│    - Normalizador de Vídeo (H.264 Main L4.1, 0 B-frames)    │
+│    - SeamlessRestamper (PTS/DTS monotônicos entre canais)   │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ HTTP Streaming (Porta 80/8080)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. RECEPTOR E EMULADOR USB (Tablet Android SM-T110)         │
+│    - stream_fetcher: Cliente de rede TCP ultraleve          │
+│    - FIFO IPC: Pipe de alta velocidade em RAM (/dev/pipe)   │
+│    - fuse_ntfs: Driver FUSE NTFS com Ring Buffer Circular   │
+│    - Linux USB Gadget: Controlador USB Mass Storage (UMS)   │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ SCSI Mass Storage sobre USB 2.0
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. DISPOSITIVO DE APRESENTAÇÃO (TV Samsung PL51F4000)       │
+│    - Controladora USB Host MStar SoC (ConnectShare 2013)    │
+│    - Leitor de Sistema de Arquivos NTFS do Firmware         │
+│    - Decodificador de Hardware H.264/AC-3                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. O Driver FUSE NTFS (`src/ntfs/fuse_ntfs.c`)
+
+Ao contrário dos sistemas tradicionais que tentam gravar arquivos físicos no flash e truncá-los continuamente (o que destrói a memória flash do dispositivo móvel e corrompe tabelas FAT32), o **USB-Stream-TV** utiliza um driver em espaço de usuário (**FUSE**) que implementa uma partição NTFS virtual.
+
+### 2.1. Geometria Esparsa e Mapeamento de Setores
+
+O FUSE carrega um template estático de metadados NTFS de 8.0 GiB (`templates/ntfs_template.tar.gz`), gerado previamente:
+- **Setores Totais**: `16.777.215` setores de 512 bytes (~8.00 GiB).
+- **Tamanho do Cluster**: 4.096 bytes (8 setores).
+- **MFT Inode 27**: Registro MFT reservado para o arquivo de streaming. O atributo `$DATA` contém uma *runlist* mapeando três grandes extents que cobrem toda a área de dados da partição virtual.
+
+Quando a TV emite leituras SCSI para setores de metadados (Setor de Boot LBA 0, `$MFT`, `$Bitmap`, diretório raiz), o FUSE responde instantaneamente servindo os bytes correspondentes da imagem de metadados em RAM ou arquivo esparso.
+
+### 2.2. Ring Buffer Circular em Memória RAM
+
+Quando a TV lê setores correspondentes à área de dados do arquivo (`foff`), a requisição é interceptada por `serve_live_backend()`:
+
+1. **Capacidade do Ring Buffer**: 128 MiB alocados em RAM (`RINGSZ = 134.217.728` bytes).
+2. **Ponteiro de Escrita Monotônico (`g_s_write`)**: A cada chunk de dados recebido da rede pelo `feeder_thread`, `g_s_write` avança de forma estritamente crescente.
+3. **Âncora de Reprodução (`g_anchor_foff` e `g_anchor_stream_pos`)**:
+   - Mapeia o offset virtual do arquivo lido pela TV (`foff`) para a posição linear da transmissão ao vivo:
+     $$\text{stream\_pos} = \text{g\_anchor\_stream\_pos} + (\text{foff} - \text{g\_anchor\_foff})$$
+   - Permite que a TV leia do byte `0` até o byte `8.000.000.000` enquanto o buffer de memória RAM mantém apenas os últimos 128 MiB da transmissão.
+
+### 2.3. Sincronização e Busca por Ponto de Partida (`snap_open_base_target`)
+
+Quando a TV inicia a reprodução, o motor realiza um alinhamento estrito para garantir que o decodificador de hardware nunca receba fragmentos de frames no meio de uma GOP:
+1. Recua `LEADBACK` bytes (12 MiB, ~20 segundos) a partir do ponteiro atual `g_s_write`.
+2. Varre o ring buffer procurando o pacote MPEG-TS que contenha:
+   - Identificador de sincronismo `0x47`.
+   - PID `0x0000` (PAT - Program Association Table).
+   - Início de Payload (PUSI).
+   - Pacote de vídeo subsequente contendo NAL Tipo 7 (SPS) e Tipo 8 (PPS), garantindo um frame IDR completo.
+3. Fixa a âncora nesse ponto (`g_anchor_stream_pos`), assegurando que o decodificador MStar da TV inicie sua reprodução em um ponto de entrada limpo.
+
+### 2.4. Isolamento de Sondagem (Probe Isolation)
+
+Durante a montagem da unidade ou abertura de diretório, o firmware da TV realiza leituras especulativas e fora de ordem (ex.: lê offset 0, depois lê offset 256 MB, 600 MB ou os últimos clusters do disco) para tentar detectar átomos MP4 ou metadados de outros contêineres:
+- **Proteção Ativa**:
+  ```c
+  if (g_base_valid && foff >= 8ULL * 1024 * 1024) {
+      uint64_t s_probe = foff_to_stream_pos(foff);
+      if (s_probe >= g_s_write + 2ULL * 1024 * 1024) {
+          fill_null(dst, c);
+          return;
+      }
+  }
+  ```
+  Leituras além da cabeça de gravação ativa retornam pacotes MPEG-TS de preenchimento nulo (PID `0x1FFF`: `0x47, 0x1F, 0xFF, 0x10, 0xFF...`), sem alterar a âncora do fluxo principal.
+
+### 2.5. Pacing e Controle de Fluxo
+
+A controladora USB 2.0 do tablet tem capacidade de fornecer dados a ~25–35 MB/s, enquanto a transmissão ao vivo chega a ~0.6–1.0 MB/s. Se a TV ler a toda velocidade, esgota o buffer de segurança de 20 segundos em menos de 1 segundo.
+- **Mecanismo de Pacing Suave**: Quando a margem de segurança entre `g_s_write` e o ponto de leitura da TV é menor que 8 MiB, o driver limita suavemente a taxa de entrega para ~1.0 MB/s.
+- Durante o sono (`usleep`), o mutex global `g_mu` é liberado para garantir que a thread de ingestão de rede (`feeder_thread`) nunca seja bloqueada.
+
+---
+
+## 3. Arquitetura Anti-Cache de Hardware
+
+A TV Samsung ConnectShare 2013 possui cache agressivo em memória não-volátil (NVM). Se um pendrive for reconectado com o mesmo nome e serial, a TV tenta retomar a reprodução da última posição salva em segundos anteriores, travando a reprodução ao vivo.
+
+Para eliminar completamente esse comportamento, o sistema implementa uma estratégia de três níveis independentes a cada troca de canal ou reinicialização:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1. ALTERNÂNCIA DE INQUIRY STRING SCSI USB                   │
+│    - LIVETV1 ↔ LIVETV2                                      │
+│    - Força o kernel da TV a desmontar e remontar o disco    │
+└──────────────────────────────┬──────────────────────────────┘
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. RANDOMIZAÇÃO DO VOLUME SERIAL NUMBER (NTFS VBR)          │
+│    - Gerado aleatoriamente a cada boot no offset 0x48       │
+│    - A TV detecta como um sistema de arquivos inédito       │
+└──────────────────────────────┬──────────────────────────────┘
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. PATCHING DE METADADOS MFT (patch_trp)                    │
+│    - Alterna Inode 27 entre "TV AO VIVO.trp" e              │
+│      "TV AO VIVO 2.tp"                                      │
+│    - Descarta qualquer cache de arquivo e resume do zero    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. O Pipeline de Transcodificação no Servidor (`server.py`)
+
+Para que o decodificador MStar 2013 processe a transmissão sem travar, os parâmetros de saída do FFmpeg no servidor são estritamente calibrados:
+
+| Parâmetro FFmpeg | Valor | Finalidade Técnica |
+| :--- | :--- | :--- |
+| `-c:v` | `libx264` | Transcodificador de referência |
+| `-preset` | `ultrafast` | Mínima latência de processamento na VPS |
+| `-tune` | `zerolatency` | **Elimina B-frames (`bframes=0`)**, evitando atrasos de reordenação |
+| `-g` e `-keyint_min` | `30` | Crava exatamente 1 frame IDR a cada 1.0s (30 fps) |
+| `-x264-params` | `repeat-headers=1` | Repete NAL SPS e PPS antes de **todos** os frames IDR |
+| `-pcr_period` | `20` | Emite PCR a cada 20 ms, travando o clock de 27 MHz do PLL da TV |
+| `-c:a` | `ac3` | Dolby Digital AC-3 estéreo 48 kHz (padrão nativo do chip MStar) |
+| `-b:a` | `384k` | Alta fidelidade sonora com conformidade ATSC/DVB |
+| `-muxdelay` | `0` (transcode) / `0.7` (eco) | Margem temporal adequada para o buffer de decodificação CPB |
+| `-streamid` | `0:256, 1:257` | PIDs fixos e imutáveis por canal (Vídeo: 0x100, Áudio: 0x101) |
+
+---
+
+## 5. Troca de Canais Contínua (SeamlessRestamper)
+
+Quando o usuário troca de canal através do controle remoto PWA:
+1. **Make-Before-Break**: O canal anterior continua transmitindo até que o novo canal estabeleça conexão de rede, decodifique o primeiro frame e entregue os primeiros pacotes TS.
+2. **SeamlessRestamper**: O módulo analisa e reescreve os valores de **PCR**, **PTS** e **DTS** do novo canal em tempo real, garantindo que o contador de tempo avance de forma estritamente monotônica sem nunca saltar para trás ou reiniciar em zero.
+3. A TV não percebe a troca física do fluxo; a imagem muda suavemente como em uma transmissão de TV aberta tradicional.

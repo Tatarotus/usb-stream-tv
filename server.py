@@ -1008,61 +1008,89 @@ class SeamlessRestamper:
 def resolve_youtube(yt_url):
     """
     Usa yt-dlp para extrair título, duração, thumbnail e URLs de stream (vídeo + áudio DASH).
-    Tenta primeiro conexão direta para máxima velocidade. Se a VPS for sinalizada como bot,
-    faz fallback transparente através do proxy residencial móvel SOCKS5 (Xiaomi Mi A2).
+    Tenta primeiro conexão direta para máxima velocidade. Se a VPS for sinalizada como bot
+    ou os cookies expirarem, faz fallback transparente através do proxy residencial móvel SOCKS5
+    sem cookies corrompidos.
     Retorna dict com metadados estruturados ou levanta ValueError.
     """
     qjs_path = "/usr/bin/qjs"
     cookies_path = os.path.join(VOD_DIR, "youtube_cookies.txt")
-    base_cmd = [
-        YT_DLP_BIN,
-        "--no-warnings",
-        "--no-playlist",
-        "--remote-components", "ejs:github",
-    ]
-    if os.path.exists(qjs_path):
-        base_cmd.extend(["--js-runtimes", f"quickjs:{qjs_path}"])
-    elif shutil.which("qjs"):
-        base_cmd.extend(["--js-runtimes", f"quickjs:{shutil.which('qjs')}"])
-    if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 100:
-        base_cmd.extend(["--cookies", cookies_path])
+    has_cookies = bool(os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 100)
 
-    base_cmd.extend([
-        "-f", "bestvideo[height<=1080][vcodec^=avc]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-        "-J",
-        yt_url
-    ])
+    def _build_cmd(use_cookies=True, proxy=""):
+        cmd = [
+            YT_DLP_BIN,
+            "--no-warnings",
+            "--no-playlist",
+            "--remote-components", "ejs:github",
+        ]
+        if os.path.exists(qjs_path):
+            cmd.extend(["--js-runtimes", f"quickjs:{qjs_path}"])
+        elif shutil.which("qjs"):
+            cmd.extend(["--js-runtimes", f"quickjs:{shutil.which('qjs')}"])
+        if use_cookies and os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 100:
+            cmd.extend(["--cookies", cookies_path])
+        if proxy:
+            cmd.extend(["--proxy", proxy])
+        cmd.extend([
+            "-f", "bestvideo[height<=1080][vcodec^=avc]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+            "-J",
+            yt_url
+        ])
+        return cmd
 
-    # 1. Tentativa Direta (rápida)
+    socks_p = get_effective_socks_proxy()
+    proxy_clean = socks_p.replace("socks5h://", "socks5://") if socks_p else ""
+
+    # 1. Tentativa Direta (rápida, com cookies se disponíveis)
     res = None
     try:
-        res = subprocess.run(base_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+        res = subprocess.run(_build_cmd(use_cookies=has_cookies), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
     except Exception:
         pass
 
-    # 2. Se falhar ou for bloqueado por detecção de bot de datacenter, tenta via proxy residencial
-    need_proxy = False
-    used_proxy = False
+    need_retry = False
     if not res or res.returncode != 0:
-        need_proxy = True
+        need_retry = True
     elif res.returncode == 0:
         try:
             test_data = json.loads(res.stdout)
             if not test_data.get("url") and not test_data.get("requested_formats"):
-                need_proxy = True
+                need_retry = True
         except Exception:
-            need_proxy = True
+            need_retry = True
 
-    socks_p = get_effective_socks_proxy()
-    if need_proxy and socks_p:
+    # Se falhou e tínhamos cookies, verificar se o erro foi de sessão/bot/reloaded
+    if need_retry and has_cookies:
+        err_text = ((res.stderr if res else "") + " " + (res.stdout if res else "")).lower()
+        if any(w in err_text for w in ["reloaded", "sign in", "bot", "cookie", "login", "confirm you"]):
+            print("[!] Cookies do YouTube expirados/inválidos detectados em resolve_youtube. Desativando cookies...")
+            try:
+                os.rename(cookies_path, cookies_path + ".expired")
+            except Exception:
+                pass
+            has_cookies = False
+
+    # 2. Contingência via proxy residencial móvel
+    if need_retry and proxy_clean:
         print("[*] yt-dlp usando proxy residencial de contingência...")
-        used_proxy = True
-        proxy_clean = socks_p.replace("socks5h://", "socks5://")
-        proxy_cmd = [base_cmd[0], "--proxy", proxy_clean] + base_cmd[1:]
         try:
-            res = subprocess.run(proxy_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=35)
+            res = subprocess.run(_build_cmd(use_cookies=has_cookies, proxy=proxy_clean), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=35)
         except subprocess.TimeoutExpired:
-            raise ValueError("Tempo esgotado ao buscar informações do vídeo no YouTube (timeout 35s).")
+            res = None
+
+        # Se falhou com cookies no proxy, tenta última vez SEM cookies via proxy
+        if (not res or res.returncode != 0) and has_cookies:
+            print("[*] Tentativa com cookies no proxy falhou. Tentando via proxy limpo sem cookies...")
+            try:
+                os.rename(cookies_path, cookies_path + ".expired")
+            except Exception:
+                pass
+            has_cookies = False
+            try:
+                res = subprocess.run(_build_cmd(use_cookies=False, proxy=proxy_clean), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=35)
+            except Exception:
+                pass
 
     if not res or res.returncode != 0:
         err = res.stderr.strip() if res else "Erro desconhecido"
@@ -2140,35 +2168,40 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                         save_vod_tasks()
 
                     cookies_path = os.path.join(VOD_DIR, "youtube_cookies.txt")
-                    has_cookies = os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 100
+                    has_cookies = bool(os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 100)
 
-                    base_yt_cmd = [
-                        YT_DLP_BIN,
-                        "--no-warnings",
-                        "--no-playlist",
-                        "--match-filter", "!is_live",
-                        "--no-live-from-start",
-                        "--remote-components", "ejs:github",
-                        "-f", "bestvideo[height<=1080][vcodec^=avc]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-                        "--merge-output-format", "mkv",
-                        "-o", raw_file
-                    ]
-                    if os.path.exists("/usr/bin/qjs"):
-                        base_yt_cmd.extend(["--js-runtimes", "quickjs:/usr/bin/qjs"])
-                    elif shutil.which("qjs"):
-                        base_yt_cmd.extend(["--js-runtimes", f"quickjs:{shutil.which('qjs')}"])
-                    if has_cookies:
-                        base_yt_cmd.extend(["--cookies", cookies_path])
+                    def _build_vod_yt_cmd(use_cookies=True, proxy=""):
+                        c = [
+                            YT_DLP_BIN,
+                            "--no-warnings",
+                            "--no-playlist",
+                            "--match-filter", "!is_live",
+                            "--no-live-from-start",
+                            "--remote-components", "ejs:github",
+                            "-f", "bestvideo[height<=1080][vcodec^=avc]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+                            "--merge-output-format", "mkv",
+                            "-o", raw_file
+                        ]
+                        if os.path.exists("/usr/bin/qjs"):
+                            c.extend(["--js-runtimes", "quickjs:/usr/bin/qjs"])
+                        elif shutil.which("qjs"):
+                            c.extend(["--js-runtimes", f"quickjs:{shutil.which('qjs')}"])
+                        if use_cookies and os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 100:
+                            c.extend(["--cookies", cookies_path])
+                        if proxy:
+                            c.extend(["--proxy", proxy])
+                        c.append(url)
+                        return c
 
                     socks_p = get_effective_socks_proxy()
-                    yt_cmd = list(base_yt_cmd)
-                    if not has_cookies and socks_p:
-                        proxy_clean = socks_p.replace("socks5h://", "socks5://")
-                        yt_cmd.extend(["--proxy", proxy_clean])
-                    yt_cmd.append(url)
+                    proxy_clean = socks_p.replace("socks5h://", "socks5://") if socks_p else ""
 
-                    speed_label = "Gigabit Direto" if has_cookies else "Proxy Móvel"
+                    use_proxy_initial = bool(not has_cookies and proxy_clean)
+                    initial_proxy = proxy_clean if use_proxy_initial else ""
+                    speed_label = "Proxy Móvel" if use_proxy_initial else "Gigabit Direto"
+
                     print(f"[VOD] Baixando YouTube ({speed_label}) '{clean_title}' em 1080p...")
+                    yt_cmd = _build_vod_yt_cmd(use_cookies=has_cookies, proxy=initial_proxy)
                     proc_yt = subprocess.Popen(yt_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, preexec_fn=_vod_subproc_setup)
                     with VOD_RUNNING_PROCS_LOCK:
                         VOD_RUNNING_PROCS[task_id] = proc_yt
@@ -2190,12 +2223,17 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                             print(f"[VOD] Tarefa {task_id} cancelada/removida, abortando thread.")
                             return
 
-                    # Se falhou em modo direto, faz retry com proxy residencial móvel
-                    if proc_yt.returncode != 0 and has_cookies and socks_p:
-                        print(f"[VOD] Tentativa direta falhou. Fazendo fallback transparente via proxy móvel...")
-                        proxy_clean = socks_p.replace("socks5h://", "socks5://")
-                        fallback_cmd = list(base_yt_cmd)
-                        fallback_cmd.extend(["--proxy", proxy_clean, url])
+                    # Se falhou e temos proxy móvel disponível, faz fallback transparente sem cookies corrompidos
+                    if proc_yt.returncode != 0 and proxy_clean and (not use_proxy_initial or has_cookies):
+                        print(f"[VOD] Tentativa inicial falhou (rc={proc_yt.returncode}). Fazendo fallback transparente via proxy móvel sem cookies...")
+                        if has_cookies:
+                            try:
+                                os.rename(cookies_path, cookies_path + ".expired")
+                            except Exception:
+                                pass
+                            has_cookies = False
+
+                        fallback_cmd = _build_vod_yt_cmd(use_cookies=False, proxy=proxy_clean)
                         proc_yt = subprocess.Popen(fallback_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, preexec_fn=_vod_subproc_setup)
                         with VOD_RUNNING_PROCS_LOCK:
                             VOD_RUNNING_PROCS[task_id] = proc_yt

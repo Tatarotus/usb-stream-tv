@@ -102,6 +102,49 @@ POSTER_CACHE_DIR = os.path.join(CATALOG_CACHE_DIR, "posters")
 os.makedirs(POSTER_CACHE_DIR, exist_ok=True)
 XTREAM_USER = os.environ.get("XTREAM_USER", "")
 XTREAM_PASS = os.environ.get("XTREAM_PASS", "")
+
+def _discover_xtream_credentials():
+    global XTREAM_USER, XTREAM_PASS, XTREAM_UPSTREAM
+    if XTREAM_USER and XTREAM_PASS:
+        return
+    candidates = [
+        CHANNELS_FILE,
+        os.path.join(CONFIG_DIR, "channels_deploy.json"),
+        os.path.join(CONFIG_DIR, "channels.json"),
+        os.path.join(CONFIG_DIR, ".env"),
+        os.path.join(os.path.dirname(CONFIG_DIR), ".env")
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            try:
+                if p.endswith(".env"):
+                    _load_env_file(p)
+                    XTREAM_USER = XTREAM_USER or os.environ.get("XTREAM_USER", "")
+                    XTREAM_PASS = XTREAM_PASS or os.environ.get("XTREAM_PASS", "")
+                    if not os.environ.get("XTREAM_UPSTREAM") and os.environ.get("XTREAM_UPSTREAM"):
+                        XTREAM_UPSTREAM = os.environ.get("XTREAM_UPSTREAM")
+                elif p.endswith(".json"):
+                    with open(p, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    srv = data.get("servidor", {})
+                    if srv.get("usuario") and srv.get("senha"):
+                        XTREAM_USER = XTREAM_USER or srv.get("usuario")
+                        XTREAM_PASS = XTREAM_PASS or srv.get("senha")
+                        if not os.environ.get("XTREAM_UPSTREAM") and srv.get("url_base"):
+                            XTREAM_UPSTREAM = srv.get("url_base")
+                    for c in data.get("canais", []):
+                        u = c.get("url", "")
+                        m = re.search(r'/(?:live|movie|series)/([^/]+)/([^/]+)/\d+', u)
+                        if m and m.group(1) not in ("{XTREAM_USER}", ""):
+                            XTREAM_USER = XTREAM_USER or m.group(1)
+                            XTREAM_PASS = XTREAM_PASS or m.group(2)
+                            break
+            except Exception:
+                pass
+        if XTREAM_USER and XTREAM_PASS:
+            break
+
+_discover_xtream_credentials()
 VOD_TASKS = {}
 VOD_TASKS_LOCK = threading.Lock()
 ACTIVE_VOD_TASK = None
@@ -651,9 +694,17 @@ class CatalogManager:
         }
 
     def get_series_info(self, series_id):
+        global XTREAM_USER, XTREAM_PASS, XTREAM_UPSTREAM
         with self.lock:
             if series_id in self.series_info_cache:
                 return self.series_info_cache[series_id]
+
+        if not XTREAM_USER or not XTREAM_PASS:
+            _discover_xtream_credentials()
+
+        if not XTREAM_USER or not XTREAM_PASS:
+            print(f"[!] Erro ao buscar série {series_id}: credenciais XTREAM_USER/XTREAM_PASS não configuradas")
+            return {"error": "Credenciais IPTV não configuradas no servidor.", "seasons": []}
 
         url = f"{XTREAM_UPSTREAM}/player_api.php?username={XTREAM_USER}&password={XTREAM_PASS}&action=get_series_info&series_id={series_id}"
         try:
@@ -710,7 +761,8 @@ class CatalogManager:
                 self.series_info_cache[series_id] = result
             return result
         except Exception as e:
-            print(f"[!] Erro ao buscar detalhes da série {series_id}: {e}")
+            safe_url = url.replace(XTREAM_PASS, "***") if XTREAM_PASS else url
+            print(f"[!] Erro ao buscar detalhes da série {series_id} ({safe_url}): {e}")
             return {"error": str(e), "seasons": []}
 
 CATALOG_MGR = CatalogManager()

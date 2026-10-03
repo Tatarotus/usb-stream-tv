@@ -3594,7 +3594,8 @@
 
                 if (!data.seasons || !data.seasons.length) {
                     if (seasonsBar) seasonsBar.innerHTML = '<div class="season-chip active">Temporada 1</div>';
-                    if (epList) epList.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-muted);">Nenhum episódio cadastrado nesta série.</div>';
+                    const errorMsg = data.error ? `Erro: ${escapeHtml(data.error)}` : 'Nenhum episódio cadastrado nesta série.';
+                    if (epList) epList.innerHTML = `<div style="text-align: center; padding: 20px; color: var(--text-muted);">${errorMsg}</div>`;
                     return;
                 }
 

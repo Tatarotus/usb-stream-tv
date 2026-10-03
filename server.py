@@ -3388,7 +3388,10 @@ self.addEventListener('message', (event) => {
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Cache-Control", "public, max-age=3600")
+        if "error" in res or not res.get("seasons"):
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        else:
+            self.send_header("Cache-Control", "public, max-age=120")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)

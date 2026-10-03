@@ -3580,7 +3580,7 @@
             document.getElementById('series-modal').style.display = 'flex';
 
             try {
-                const res = await fetch(`/api/catalog/series_info?id=${selectedSeries.id}`);
+                const res = await fetch(`/api/catalog/series_info?id=${selectedSeries.id}&_t=${Date.now()}`, { cache: 'no-cache' });
                 const data = await res.json();
                 currentSeriesDetails = data;
 
@@ -4449,7 +4449,7 @@
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v7') caches.delete(k);
+                        if (k !== 'controle-tv-v8') caches.delete(k);
                     });
                 }).catch(() => {});
             }

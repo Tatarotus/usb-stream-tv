@@ -5665,8 +5665,90 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
         /* Modal de Detalhes do VOD Salvo */
         .vod-details-modal-box {
             height: auto !important;
-            max-height: 85vh;
+            max-height: 90vh;
+            overflow-y: auto;
             border-color: #3b82f6 !important;
+            padding: 18px !important;
+            gap: 14px !important;
+        }
+        .vod-modal-hero {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            width: 100%;
+        }
+        .vod-modal-hero-top {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding-right: 44px;
+        }
+        .vod-modal-poster {
+            width: 76px;
+            height: 106px;
+            border-radius: 10px;
+            object-fit: cover;
+            background: #0f172a;
+            border: 2px solid var(--border);
+            flex-shrink: 0;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+        }
+        .vod-modal-badges-col {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: flex-start;
+            min-width: 0;
+        }
+        .vod-modal-ep-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+            border: 2px solid #a78bfa;
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: 800;
+            padding: 5px 12px;
+            border-radius: 20px;
+            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35);
+        }
+        .vod-modal-title-box {
+            background: rgba(15, 23, 42, 0.85);
+            border: 2px solid rgba(59, 130, 246, 0.45);
+            border-radius: 12px;
+            padding: 14px 16px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .vod-modal-full-title {
+            font-size: 19px !important;
+            font-weight: 900 !important;
+            color: #ffffff !important;
+            line-height: 1.4 !important;
+            word-break: break-word !important;
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: unset !important;
+            display: block !important;
+            -webkit-line-clamp: unset !important;
+            -webkit-box-orient: unset !important;
+        }
+        .vod-grid-ep-badge {
+            background: rgba(124, 58, 237, 0.9);
+            border: 1px solid #a78bfa;
+            color: #ffffff;
+            font-size: 11px;
+            font-weight: 800;
+            padding: 2px 7px;
+            border-radius: 6px;
+            margin-top: 3px;
+            width: fit-content;
+            display: inline-block;
         }
         .vod-modal-details-grid {
             display: grid;
@@ -6981,12 +7063,16 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div class="series-modal-box vod-details-modal-box" onclick="event.stopPropagation()">
             <button class="modal-close-icon-btn" onclick="closeVodDetailsModal()" aria-label="Fechar">✕</button>
             
-            <div class="modal-series-header">
-                <img id="vod-modal-poster-img" class="modal-series-poster" src="" alt="" onerror="this.outerHTML='<div class=\\'modal-series-poster\\'>🎬</div>'">
-                <div class="modal-series-info">
-                    <div id="vod-modal-badge" class="badge-route badge-direct" style="display:inline-flex; width:fit-content; margin-bottom:6px; font-size:12px;">🎬 VÍDEO SALVO</div>
-                    <div id="vod-modal-title-text" class="modal-series-title" style="word-break: break-word; white-space: normal; font-size: 20px;">Título do Vídeo</div>
-                    <div id="vod-modal-meta-text" class="modal-series-meta">Tamanho • Data</div>
+            <div class="vod-modal-hero">
+                <div class="vod-modal-hero-top">
+                    <img id="vod-modal-poster-img" class="vod-modal-poster" src="" alt="" onerror="this.outerHTML='<div class=\\'vod-modal-poster\\'>🎬</div>'">
+                    <div class="vod-modal-badges-col">
+                        <div id="vod-modal-badge" class="badge-route badge-direct" style="font-size:12px;">🎬 VÍDEO SALVO</div>
+                        <div id="vod-modal-ep-pill" class="vod-modal-ep-pill" style="display: none;">🏷️ S01E05</div>
+                    </div>
+                </div>
+                <div class="vod-modal-title-box">
+                    <div id="vod-modal-title-text" class="vod-modal-full-title">Título Completo</div>
                 </div>
             </div>
 
@@ -7873,12 +7959,16 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             let html = '';
             readyTasks.forEach(task => {
                 const isPlaying = (task.id === activeVodTask);
-                const title = escapeHtml(task.title || task.display_name || 'Vídeo');
+                let rawTitle = (task.title || task.display_name || 'Vídeo').trim();
+                rawTitle = rawTitle.replace(/^@\s*/, '');
+                const title = escapeHtml(rawTitle);
                 const safeId = escapeHtml(task.id);
+                const epInfo = extractSeasonEpisode(rawTitle);
+                const epBadge = epInfo ? `<div class="vod-grid-ep-badge">🏷️ ${escapeHtml(epInfo)}</div>` : '';
 
                 const urlLower = (task.url || '').toLowerCase();
                 const isYt = urlLower.includes('youtube.com') || urlLower.includes('youtu.be') || title.toLowerCase().includes('youtube');
-                const isSeries = title.includes(' - ') || title.toLowerCase().includes('temporada') || title.toLowerCase().includes('episodio') || title.toLowerCase().includes('ep ');
+                const isSeries = Boolean(epInfo) || title.includes(' - ') || title.toLowerCase().includes('temporada') || title.toLowerCase().includes('episodio') || title.toLowerCase().includes('ep ');
 
                 let badgeHtml = '';
                 if (isPlaying) {
@@ -7903,6 +7993,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                         </div>
                         <div class="vod-grid-body">
                             <div class="vod-grid-title" title="${title}">${title}</div>
+                            ${epBadge}
                             <button class="btn-vod-grid-play" onclick="event.stopPropagation(); playVodTask('${safeId}', '${title}')" aria-label="Assistir ${title} na TV">
                                 ▶️ ASSISTIR
                             </button>
@@ -7917,6 +8008,20 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             shelf.innerHTML = html;
         }
 
+        // Extrator inteligente de Temporada e Episódio
+        function extractSeasonEpisode(title) {
+            if (!title) return null;
+            let m = title.match(/\bS(\d{1,2})\s*E(\d{1,3})\b/i);
+            if (m) return `Temp. ${parseInt(m[1], 10)} • Ep. ${parseInt(m[2], 10)}`;
+            m = title.match(/Temporada\s*(\d{1,2}).*?Epis[oó]dio\s*(\d{1,3})/i);
+            if (m) return `Temp. ${parseInt(m[1], 10)} • Ep. ${parseInt(m[2], 10)}`;
+            m = title.match(/\bT(\d{1,2})\s*E(\d{1,3})\b/i);
+            if (m) return `Temp. ${parseInt(m[1], 10)} • Ep. ${parseInt(m[2], 10)}`;
+            m = title.match(/\b(?:Epis[oó]dio|Ep\.?)\s*(\d{1,3})\b/i);
+            if (m) return `Episódio ${parseInt(m[1], 10)}`;
+            return null;
+        }
+
         // ==================== MODAL DE DETALHES DE VOD SALVO ====================
         let selectedVodTaskForModal = null;
 
@@ -7929,17 +8034,29 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             const modal = document.getElementById('vod-details-modal');
             const titleEl = document.getElementById('vod-modal-title-text');
             const badgeEl = document.getElementById('vod-modal-badge');
+            const epPillEl = document.getElementById('vod-modal-ep-pill');
             const posterEl = document.getElementById('vod-modal-poster-img');
             const sizeEl = document.getElementById('vod-modal-size-val');
             const dateEl = document.getElementById('vod-modal-date-val');
             const statusEl = document.getElementById('vod-modal-status-val');
 
-            const fullTitle = task.title || task.display_name || 'Vídeo Salvo';
+            let fullTitle = (task.title || task.display_name || 'Vídeo Salvo').trim();
+            fullTitle = fullTitle.replace(/^@\s*/, '');
             if (titleEl) titleEl.innerText = fullTitle;
+
+            const epInfo = extractSeasonEpisode(fullTitle);
+            if (epPillEl) {
+                if (epInfo) {
+                    epPillEl.innerText = `🏷️ ${epInfo}`;
+                    epPillEl.style.display = 'inline-flex';
+                } else {
+                    epPillEl.style.display = 'none';
+                }
+            }
 
             const urlLower = (task.url || '').toLowerCase();
             const isYt = urlLower.includes('youtube.com') || urlLower.includes('youtu.be') || fullTitle.toLowerCase().includes('youtube');
-            const isSeries = fullTitle.includes(' - ') || fullTitle.toLowerCase().includes('temporada') || fullTitle.toLowerCase().includes('episodio') || fullTitle.toLowerCase().includes('ep ');
+            const isSeries = Boolean(epInfo) || fullTitle.includes(' - ') || fullTitle.toLowerCase().includes('temporada') || fullTitle.toLowerCase().includes('episodio') || fullTitle.toLowerCase().includes('ep ');
 
             if (badgeEl) {
                 if (task.id === activeVodTask) {
@@ -7972,7 +8089,21 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             }
 
             if (sizeEl) {
-                sizeEl.innerText = task.file_size_str || (task.size ? `${(task.size / (1024*1024)).toFixed(1)} MB` : 'Armazenado no Flash/USB');
+                const bytes = task.file_size || task.size || task.file_size_bytes;
+                if (task.file_size_str) {
+                    sizeEl.innerText = task.file_size_str;
+                } else if (bytes && Number(bytes) > 0) {
+                    const b = Number(bytes);
+                    if (b >= 1024 * 1024 * 1024) {
+                        sizeEl.innerText = (b / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+                    } else if (b >= 1024 * 1024) {
+                        sizeEl.innerText = (b / (1024 * 1024)).toFixed(1) + ' MB';
+                    } else {
+                        sizeEl.innerText = (b / 1024).toFixed(0) + ' KB';
+                    }
+                } else {
+                    sizeEl.innerText = 'Armazenado no Flash/USB';
+                }
             }
 
             if (dateEl) {

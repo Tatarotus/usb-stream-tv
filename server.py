@@ -2904,7 +2904,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if not sw:
             sw = """// Service Worker para PWA do Controle Remoto
-const CACHE_NAME = 'controle-tv-v12';
+const CACHE_NAME = 'controle-tv-v13';
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
@@ -4620,66 +4620,47 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             white-space: nowrap;
         }
 
-        /* 1. TOPO: Zona de Visão Passiva e Central de Mídia Interativa */
-        header.glance-header {
+        /* 1. TOPO: Central Universal da TV (Status, O que está no ar & Acesso aos Salvos) */
+        header.top-tv-banner {
             display: flex;
             flex-direction: column;
             gap: 12px;
-            background: #111827;
-            border: 2px solid var(--border);
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border: 3px solid var(--gold);
             border-radius: var(--btn-radius);
-            padding: 16px;
+            padding: 16px 18px;
             position: relative;
-        }
-
-        header.glance-header.interactive {
+            box-shadow: 0 10px 28px rgba(250, 204, 21, 0.16);
             cursor: pointer;
             transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
             user-select: none;
             -webkit-tap-highlight-color: transparent;
         }
-        header.glance-header.interactive:hover {
+        header.top-tv-banner:hover {
             border-color: var(--gold);
-            box-shadow: 0 6px 24px rgba(250, 204, 21, 0.18);
+            box-shadow: 0 8px 32px rgba(250, 204, 21, 0.26);
         }
-        header.glance-header.interactive:active {
-            transform: scale(0.985);
+        header.top-tv-banner:active {
+            transform: scale(0.99);
             border-color: var(--gold);
         }
-        header.glance-header.interactive:focus-visible {
+        header.top-tv-banner:focus-visible {
             outline: 3px solid var(--gold);
             outline-offset: 3px;
         }
 
-        .clock-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-
-        .clock-time {
-            font-size: 32px;
-            font-weight: 900;
-            color: var(--gold);
-            letter-spacing: -0.5px;
-            font-variant-numeric: tabular-nums;
-        }
-
-        .clock-date {
-            font-size: 18px;
-            font-weight: 700;
-            color: var(--text-muted);
-            text-transform: capitalize;
-        }
-
-        .glance-status-row {
+        .top-tv-status-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 10px;
             flex-wrap: wrap;
+        }
+
+        .top-tv-content {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
         }
 
         .tv-status-badge {
@@ -6133,15 +6114,23 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             justify-content: center;
             gap: 10px;
         }
-        .btn-modal-play {
+        .btn-modal-save {
             background: #15803d;
             border: 3px solid #22c55e;
             color: #ffffff;
         }
-        .btn-modal-save {
+        .btn-modal-save:active {
+            background: #166534;
+            transform: scale(0.98);
+        }
+        .btn-modal-play {
             background: #1e3a5f;
             border: 3px solid #38bdf8;
             color: #ffffff;
+        }
+        .btn-modal-play:active {
+            background: #0f2744;
+            transform: scale(0.98);
         }
         .btn-modal-close {
             min-height: 52px;
@@ -6361,10 +6350,11 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
         .episode-actions-row {
             display: flex;
             gap: 10px;
-            margin-top: 2px;
+            margin-top: 4px;
+            align-items: stretch;
         }
-        .btn-ep-play-senior {
-            flex: 1.4;
+        .btn-ep-save-senior {
+            flex: 1;
             min-height: 48px;
             background: #15803d;
             border: 2px solid #22c55e;
@@ -6379,29 +6369,29 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             gap: 8px;
             transition: all 0.1s ease;
         }
-        .btn-ep-play-senior:active {
+        .btn-ep-save-senior:active {
             background: #166534;
-            transform: scale(0.96);
+            transform: scale(0.97);
         }
-        .btn-ep-save-senior {
-            flex: 1;
+        .btn-ep-play-senior {
+            flex: 0 0 54px;
+            width: 54px;
             min-height: 48px;
             background: #1e3a5f;
             border: 2px solid #38bdf8;
             color: #ffffff;
-            font-size: 15px;
-            font-weight: 800;
+            font-size: 20px;
+            font-weight: 900;
             border-radius: 10px;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 6px;
             transition: all 0.1s ease;
         }
-        .btn-ep-save-senior:active {
+        .btn-ep-play-senior:active {
             background: #0f2744;
-            transform: scale(0.96);
+            transform: scale(0.94);
         }
 
         /* Modal para instruções iOS */
@@ -6702,33 +6692,8 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             }
 
             /* Cabeçalho Desktop */
-            header.glance-header {
-                flex-direction: row;
-                justify-content: space-between;
-                align-items: center;
-                padding: 16px 24px;
-            }
-            /* Botões de Assistir no Computador Visíveis Apenas no Desktop Widescreen */
-            .btn-mirror-web {
-                display: inline-flex !important;
-            }
-            .btn-modal-web {
-                display: block !important;
-            }
-            .btn-ep-web {
-                display: inline-flex !important;
-            }
-            .btn-play-vod-web {
-                display: flex !important;
-            }
-            .btn-channel-web {
-                display: inline-flex !important;
-            }
-            #btn-yt-web {
-                display: inline-block !important;
-            }
-            .clock-row {
-                gap: 16px;
+            header.top-tv-banner {
+                padding: 18px 24px;
             }
 
             /* Seletor de Modo Desktop */
@@ -6821,23 +6786,32 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             <button style="background:transparent; border:none; color:var(--text-dim); font-size:24px; padding:4px;" onclick="dismissPWABanner()">✕</button>
         </div>
 
-        <!-- TOPO: Zona de Visão Passiva e Central de Mídia Interativa -->
-        <header id="glance-header" class="glance-header interactive" onclick="openDownloadsModal()" role="button" tabindex="0" aria-label="Abrir Memória da TV e YouTube">
-            <div class="clock-row">
-                <div id="clock-time" class="clock-time">--:--</div>
-                <div id="clock-date" class="clock-date">Carregando data...</div>
-            </div>
-            <div class="glance-status-row">
+        <!-- TOPO: Central Universal da TV (Status, O que está no ar & Acesso aos Salvos) -->
+        <header id="top-tv-banner" class="top-tv-banner" onclick="openDownloadsModal()" role="button" tabindex="0" aria-label="Ver vídeos salvos e downloads da TV">
+            <div class="top-tv-status-row">
                 <div id="tv-status-badge" class="tv-status-badge" role="status" aria-live="polite">
                     <span>🟢</span>
                     <span id="tv-status-text">Conectando à TV...</span>
                 </div>
-                <div id="header-media-badge" class="header-media-badge">
-                    <span id="header-media-icon">📥</span>
-                    <span id="header-media-text">Memória da TV & YouTube</span>
+                <div id="header-media-badge" class="header-media-badge" onclick="event.stopPropagation(); openDownloadsModal()">
+                    <span id="header-media-icon">💾</span>
+                    <span id="header-media-text">Memória da TV</span>
                     <span style="font-size: 14px; opacity: 0.8;">▾</span>
                 </div>
             </div>
+            
+            <div class="top-tv-content">
+                <div id="tv-banner-label" class="now-playing-label">
+                    <span id="tv-banner-dot" class="pulsing-dot"></span>
+                    <span id="tv-banner-label-text">TRANSMITINDO NA TV AO VIVO</span>
+                </div>
+                <div id="tv-banner-title" class="now-playing-title">Carregando canal...</div>
+                <div id="tv-banner-subtext" class="now-playing-subtext">Modo TV ao Vivo • Toque para ver os salvos na TV</div>
+            </div>
+
+            <button id="btn-banner-return-live" class="btn-return-live" style="display: none;" onclick="event.stopPropagation(); returnToLiveTv()">
+                📺 VOLTAR PARA A TV AO VIVO
+            </button>
         </header>
 
         <!-- SELETOR PRINCIPAL DE MODO: FILMES vs SÉRIES vs TV AO VIVO -->
@@ -6855,37 +6829,6 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
 
         <!-- Banner de Confirmação de Ação (Aviso Longo) -->
         <div id="action-banner" class="action-banner" role="status" aria-live="polite"></div>
-
-        <!-- Cartão Global: Filme Passando Agora na TV -->
-        <div id="vod-active-card" class="now-playing-card" style="display: none;">
-            <div class="now-playing-label">
-                <span class="pulsing-dot"></span>
-                PASSANDO AGORA NO CINEMA DA TV
-            </div>
-            <div id="vod-active-title" class="now-playing-title">Carregando filme...</div>
-            <div class="now-playing-subtext">Modo Cinema • Controle de Pausa na TV</div>
-            <button class="btn-return-live" onclick="returnToLiveTv()">
-                📺 VOLTAR PARA A TV AO VIVO
-            </button>
-        </div>
-
-        <!-- Cartão Global: Vídeo do YouTube Passando Agora na TV -->
-        <div id="yt-active-card" class="yt-active-card" style="display: none;">
-            <div class="now-playing-label" style="color: #f87171;">
-                <span class="pulsing-dot" style="background: #ef4444;"></span>
-                PASSANDO AGORA NO YOUTUBE DA TV
-            </div>
-            <div style="display: flex; gap: 14px; align-items: center;">
-                <img id="yt-active-thumb" style="width: 80px; height: 50px; border-radius: 8px; object-fit: cover; background: #000; border: 2px solid rgba(255,255,255,0.2);" src="" alt="">
-                <div style="flex: 1; min-width: 0;">
-                    <div id="yt-active-title" class="now-playing-title" style="font-size: 20px;">Vídeo do YouTube</div>
-                    <div id="yt-active-meta" class="now-playing-subtext" style="color: #cbd5e1;">Reproduzindo diretamente na TV</div>
-                </div>
-            </div>
-            <button class="btn-return-live" onclick="returnToLiveTv()">
-                📺 VOLTAR PARA A TV AO VIVO
-            </button>
-        </div>
 
         <!-- ==================== ÁREA DO MODO CINEMA & FILMES ==================== -->
         <div id="section-cinema" style="display: flex; flex-direction: column; gap: 18px;">
@@ -7092,15 +7035,17 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             </div>
             <div id="modal-plot-text" class="modal-plot">Sinopse do filme...</div>
             <div class="modal-actions">
-                <button class="btn-modal-action btn-modal-play" onclick="playSelectedMovieNow()">
-                    📺 ASSISTIR NA TV DA SALA
-                </button>
                 <button class="btn-modal-action btn-modal-save" onclick="saveSelectedMovieVod()">
-                    📥 BAIXAR PARA ASSISTIR DEPOIS
+                    📥 SALVAR NO CINEMA DA TV
                 </button>
-                <button class="btn-modal-action btn-modal-close" onclick="closeMovieModal()">
-                    ✕ Fechar
-                </button>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-modal-action btn-modal-play" style="flex: 1.4; min-height: 52px; font-size: 16px;" onclick="playSelectedMovieNow()">
+                        ▶ ASSISTIR NA TV
+                    </button>
+                    <button class="btn-modal-action btn-modal-close" style="flex: 1; min-height: 52px; font-size: 16px;" onclick="closeMovieModal()">
+                        ✕ Fechar
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -7827,6 +7772,55 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             }
         }
 
+        // Estado da Central Universal da TV no Topo
+        let activeNowPlayingState = {
+            type: 'live', // 'vod', 'yt', 'live'
+            title: '',
+            subtext: ''
+        };
+
+        function renderTvBanner() {
+            const bannerLabel = document.getElementById('tv-banner-label-text');
+            const bannerDot = document.getElementById('tv-banner-dot');
+            const bannerTitle = document.getElementById('tv-banner-title');
+            const bannerSubtext = document.getElementById('tv-banner-subtext');
+            const btnReturnLive = document.getElementById('btn-banner-return-live');
+
+            if (!bannerTitle) return;
+
+            const readyCount = (vodTasks || []).filter(t => t.status === 'ready').length;
+            const savedHint = readyCount > 0 ? `Toque para ver os ${readyCount} vídeos salvos na TV` : 'Toque para abrir a lista de vídeos salvos';
+
+            if (activeNowPlayingState.type === 'vod') {
+                if (bannerLabel) bannerLabel.innerText = 'PASSANDO AGORA NO CINEMA DA TV';
+                if (bannerDot) {
+                    bannerDot.style.background = 'var(--green)';
+                    bannerDot.style.boxShadow = '0 0 10px var(--green)';
+                }
+                bannerTitle.innerText = activeNowPlayingState.title || 'Filme em Reprodução';
+                if (bannerSubtext) bannerSubtext.innerText = `Modo Cinema • Controle de Pausa na TV • ${savedHint}`;
+                if (btnReturnLive) btnReturnLive.style.display = 'flex';
+            } else if (activeNowPlayingState.type === 'yt') {
+                if (bannerLabel) bannerLabel.innerText = 'PASSANDO AGORA NO YOUTUBE DA TV';
+                if (bannerDot) {
+                    bannerDot.style.background = '#ef4444';
+                    bannerDot.style.boxShadow = '0 0 10px #ef4444';
+                }
+                bannerTitle.innerText = activeNowPlayingState.title || 'Vídeo do YouTube';
+                if (bannerSubtext) bannerSubtext.innerText = `Vídeo do YouTube • Transmitindo na TV • ${savedHint}`;
+                if (btnReturnLive) btnReturnLive.style.display = 'flex';
+            } else {
+                if (bannerLabel) bannerLabel.innerText = 'TRANSMITINDO NA TV AO VIVO';
+                if (bannerDot) {
+                    bannerDot.style.background = 'var(--green)';
+                    bannerDot.style.boxShadow = '0 0 10px var(--green)';
+                }
+                bannerTitle.innerText = activeNowPlayingState.title || currentActiveName || 'TV ao Vivo';
+                if (bannerSubtext) bannerSubtext.innerText = `Modo TV ao Vivo • ${savedHint}`;
+                if (btnReturnLive) btnReturnLive.style.display = 'none';
+            }
+        }
+
         // Controle de Abertura e Fechamento da Central de Memória da TV e YouTube
         function openDownloadsModal() {
             triggerHaptic();
@@ -7855,18 +7849,21 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                 activeVodTask = data.active_vod;
                 vodTasks = data.tasks || [];
 
-                // 1. Atualiza Banner de Filme no Ar (Global)
-                const vodCard = document.getElementById('vod-active-card');
-                const vodTitle = document.getElementById('vod-active-title');
-
+                // 1. Atualiza Central Universal da TV no Topo (Modo Cinema VOD)
                 if (activeVodTask) {
                     const activeTaskObj = vodTasks.find(t => t.id === activeVodTask);
                     const name = activeTaskObj ? (activeTaskObj.title || activeTaskObj.display_name) : 'Filme em Reprodução';
-                    if (vodTitle) vodTitle.innerText = name;
-                    if (vodCard) vodCard.style.display = 'flex';
-                } else {
-                    if (vodCard) vodCard.style.display = 'none';
+                    activeNowPlayingState = {
+                        type: 'vod',
+                        title: name
+                    };
+                } else if (activeNowPlayingState.type === 'vod') {
+                    activeNowPlayingState = {
+                        type: 'live',
+                        title: currentActiveName || 'TV ao Vivo'
+                    };
                 }
+                renderTvBanner();
 
                 // 2. Atualiza Espaço Livre na TV
                 const diskBadge = document.getElementById('vod-disk-badge');
@@ -8301,6 +8298,11 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
         // Voltar do Cinema ou YouTube para a TV Ao Vivo
         async function returnToLiveTv() {
             triggerHaptic();
+            activeNowPlayingState = {
+                type: 'live',
+                title: 'Retornando para a TV Ao Vivo...'
+            };
+            renderTvBanner();
             showActionBanner(`Retornando para a TV Ao Vivo...`);
             try {
                 await fetch('/api/vod/live', { method: 'POST' });
@@ -9048,7 +9050,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                 if (typeof epDur === 'string' && epDur.startsWith('00:')) epDur = epDur.substring(3);
 
                 html += `
-                    <div class="episode-card" onclick="playEpisode('${seasonNum}', ${epIdx})">
+                    <div class="episode-card">
                         <div class="episode-main-info">
                             <div class="episode-badge">${epNumBadge}</div>
                             <div class="episode-title-group">
@@ -9057,11 +9059,11 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                             </div>
                         </div>
                         <div class="episode-actions-row">
-                            <button type="button" class="btn-ep-play-senior" onclick="event.stopPropagation(); playEpisode('${seasonNum}', ${epIdx})">
-                                <span>▶️ ASSISTIR NA TV</span>
-                            </button>
                             <button type="button" class="btn-ep-save-senior" onclick="event.stopPropagation(); saveEpisodeVod('${seasonNum}', ${epIdx})">
-                                <span>📥 Salvar</span>
+                                <span>📥 Salvar Episódio</span>
+                            </button>
+                            <button type="button" class="btn-ep-play-senior" onclick="event.stopPropagation(); playEpisode('${seasonNum}', ${epIdx})" title="Assistir agora na TV" aria-label="Assistir episódio agora na TV">
+                                <span>▶</span>
                             </button>
                         </div>
                     </div>
@@ -9618,31 +9620,31 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                 const statusBadge = document.getElementById('tv-status-badge');
                 const statusText = document.getElementById('tv-status-text');
 
-                // Atualiza Banner de Vídeo do YouTube Passando Agora
-                const ytCard = document.getElementById('yt-active-card');
-                const ytTitle = document.getElementById('yt-active-title');
-                const ytThumb = document.getElementById('yt-active-thumb');
-                const ytMeta = document.getElementById('yt-active-meta');
+                // Atualiza Estado da Central Universal da TV no Topo
                 if (data.youtube) {
-                    if (ytCard) ytCard.style.display = 'flex';
-                    if (ytTitle) ytTitle.innerText = data.youtube.title || 'Vídeo do YouTube';
-                    if (ytMeta) ytMeta.innerText = data.youtube.is_live ? 'Ao Vivo no YouTube • Transmitindo na TV' : 'Vídeo do YouTube • Transmitindo na TV';
-                    if (ytThumb) {
-                        if (data.youtube.thumbnail) {
-                            ytThumb.src = data.youtube.thumbnail;
-                            ytThumb.style.display = 'block';
-                        } else {
-                            ytThumb.style.display = 'none';
-                        }
-                    }
+                    activeNowPlayingState = {
+                        type: 'yt',
+                        title: data.youtube.title || 'Vídeo do YouTube'
+                    };
                     const ytKey = data.youtube.url || data.youtube.title;
                     if (lastNotifiedYt !== ytKey) {
                         lastNotifiedYt = ytKey;
                         notifyUser('▶️ YouTube Pronto na TV!', `"${data.youtube.title || 'Vídeo'}" começou a transmitir na TV!`, '/');
                     }
+                } else if (data.active_vod) {
+                    activeNowPlayingState.type = 'vod';
+                    if (data.vod_display_name) {
+                        activeNowPlayingState.title = data.vod_display_name;
+                    }
                 } else {
-                    if (ytCard) ytCard.style.display = 'none';
+                    if (activeNowPlayingState.type !== 'vod') {
+                        activeNowPlayingState = {
+                            type: 'live',
+                            title: data.active_channel_name || currentActiveName || 'TV ao Vivo'
+                        };
+                    }
                 }
+                renderTvBanner();
 
                 if (data.youtube) {
                     statusBadge.className = 'tv-status-badge';
@@ -9665,6 +9667,10 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                     currentActiveName = data.active_channel_name;
                     const nowTitle = document.getElementById('now-playing-title');
                     if (nowTitle) nowTitle.innerText = data.active_channel_name;
+                    if (activeNowPlayingState.type === 'live') {
+                        activeNowPlayingState.title = data.active_channel_name;
+                        renderTvBanner();
+                    }
                 }
 
                 if (data.active_channel_id && data.active_channel_id !== currentActiveId) {
@@ -9865,7 +9871,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v12') caches.delete(k);
+                        if (k !== 'controle-tv-v13') caches.delete(k);
                     });
                 }).catch(() => {});
             }

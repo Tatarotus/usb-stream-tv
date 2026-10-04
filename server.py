@@ -2168,6 +2168,7 @@ def probe_vod_stream(url, use_proxy=False):
     """Obtém metadados de vídeo, áudio e duração remota via ffprobe."""
     probe_cmd = [
         "ffprobe", "-v", "error",
+        "-headers", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n",
         "-show_entries", "format=duration:stream=codec_type,codec_name,profile,level,pix_fmt,width,height,channels,sample_rate,sample_aspect_ratio,r_frame_rate",
         "-of", "json"
     ]
@@ -2493,6 +2494,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     "-reconnect_delay_max", "5",
                     "-recv_buffer_size", "1048576",
                     "-tcp_nodelay", "1",
+                    "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "-i", resolved_url
                 ])
 
@@ -2564,6 +2566,8 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
             file_size = os.path.getsize(out_file)
             if file_size < 10000:
                 raise RuntimeError("Arquivo gerado vazio ou corrompido")
+            if duration > 300 and file_size < 1000000:
+                raise RuntimeError("Vídeo rejeitado pela CDN (arquivo muito pequeno ou aviso de método não autorizado)")
 
             fat_name = re.sub(r'[^a-zA-Z0-9 _-]', '', clean_title).strip()
             fat_name = (fat_name[:26] or "FILME") + ".mp4"

@@ -57,7 +57,7 @@
             min-height: 100vh;
             display: flex;
             justify-content: center;
-            padding-bottom: max(250px, calc(210px + env(safe-area-inset-bottom)));
+            padding-bottom: max(110px, calc(85px + env(safe-area-inset-bottom)));
             user-select: none;
             -webkit-user-select: none;
         }
@@ -101,7 +101,7 @@
             white-space: nowrap;
         }
 
-        /* 1. TOPO: Zona de Visão Passiva (Relógio e Status) */
+        /* 1. TOPO: Zona de Visão Passiva e Central de Mídia Interativa */
         header.glance-header {
             display: flex;
             flex-direction: column;
@@ -110,6 +110,26 @@
             border: 2px solid var(--border);
             border-radius: var(--btn-radius);
             padding: 16px;
+            position: relative;
+        }
+
+        header.glance-header.interactive {
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        header.glance-header.interactive:hover {
+            border-color: var(--gold);
+            box-shadow: 0 6px 24px rgba(250, 204, 21, 0.18);
+        }
+        header.glance-header.interactive:active {
+            transform: scale(0.985);
+            border-color: var(--gold);
+        }
+        header.glance-header.interactive:focus-visible {
+            outline: 3px solid var(--gold);
+            outline-offset: 3px;
         }
 
         .clock-row {
@@ -135,13 +155,21 @@
             text-transform: capitalize;
         }
 
+        .glance-status-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
         .tv-status-badge {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            font-size: 18px;
+            font-size: 16px;
             font-weight: 800;
-            padding: 8px 16px;
+            padding: 7px 14px;
             border-radius: 30px;
             width: fit-content;
             background: rgba(34, 197, 94, 0.15);
@@ -158,6 +186,39 @@
             background: rgba(239, 68, 68, 0.2);
             color: var(--red);
             border-color: #ef4444;
+        }
+
+        /* Badge Dinâmica de Mídia/Downloads no Header */
+        .header-media-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 15px;
+            font-weight: 800;
+            padding: 7px 14px;
+            border-radius: 30px;
+            background: rgba(56, 189, 248, 0.12);
+            color: #38bdf8;
+            border: 2px solid rgba(56, 189, 248, 0.35);
+            letter-spacing: 0.2px;
+            transition: all 0.2s ease;
+        }
+        .header-media-badge.has-ready {
+            background: rgba(250, 204, 21, 0.14);
+            color: var(--gold);
+            border-color: rgba(250, 204, 21, 0.45);
+        }
+        .header-media-badge.downloading {
+            background: rgba(234, 179, 8, 0.2);
+            color: var(--gold);
+            border-color: var(--gold);
+            box-shadow: 0 0 12px rgba(250, 204, 21, 0.4);
+            animation: pulse-badge 1.6s infinite ease-in-out;
+        }
+        @keyframes pulse-badge {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.4); }
+            50% { transform: scale(1.02); box-shadow: 0 0 0 6px rgba(250, 204, 21, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(250, 204, 21, 0); }
         }
 
         /* SELETOR PRINCIPAL DE MODO: CINEMA VOD vs TV AO VIVO */
@@ -623,6 +684,207 @@
             background: #ef4444;
             color: #ffffff;
             transform: scale(0.96);
+        }
+
+        /* ==================== CENTRAL DE MEMÓRIA DA TV E YOUTUBE (MODAL / DRAWER) ==================== */
+        .downloads-modal-box {
+            background: #111827;
+            border: 3px solid var(--gold);
+            border-radius: 20px;
+            padding: 18px;
+            max-width: 620px;
+            width: 100%;
+            height: 92vh;
+            max-height: 92vh;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.9);
+            position: relative;
+            box-sizing: border-box;
+            animation: slideUpModal 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        @keyframes slideUpModal {
+            from { opacity: 0; transform: translateY(20px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .downloads-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 12px;
+            border-bottom: 2px solid var(--border);
+            flex-shrink: 0;
+            padding-right: 48px;
+        }
+
+        .downloads-modal-title {
+            font-size: 21px;
+            font-weight: 900;
+            color: #ffffff;
+            line-height: 1.2;
+            letter-spacing: -0.3px;
+        }
+
+        .vod-disk-badge {
+            font-size: 14px;
+            font-weight: 800;
+            color: var(--gold);
+            margin-top: 3px;
+            display: inline-block;
+        }
+
+        .downloads-modal-body {
+            overflow-y: auto;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            padding-right: 4px;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* Fila de Downloads Ativos em Largura Total */
+        .active-downloads-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        /* ==================== GRADE DE 2 COLUNAS DE VODS PRONTOS ==================== */
+        .vod-grid-2col {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .vod-grid-card {
+            background: var(--surface);
+            border: 2px solid var(--border);
+            border-radius: 14px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.1s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+            position: relative;
+        }
+        .vod-grid-card.active {
+            border-color: var(--gold);
+            box-shadow: 0 0 18px rgba(250, 204, 21, 0.4);
+        }
+        .vod-grid-card:active {
+            transform: scale(0.975);
+        }
+        .vod-grid-card:focus-visible {
+            outline: 3px solid var(--gold);
+            outline-offset: 2px;
+        }
+
+        .vod-grid-poster-wrap {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 2/3;
+            background: #0b0f19;
+            overflow: hidden;
+        }
+
+        .vod-grid-poster-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .vod-grid-poster-fallback {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 38px;
+            background: #0f172a;
+            color: var(--gold);
+        }
+
+        .vod-grid-badge {
+            position: absolute;
+            top: 6px;
+            left: 6px;
+            font-size: 11px;
+            font-weight: 900;
+            padding: 3px 6px;
+            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(4px);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .vod-grid-badge.live-active {
+            background: #15803d;
+            border-color: var(--green);
+            color: #ffffff;
+        }
+
+        .vod-grid-body {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex: 1;
+            justify-content: space-between;
+        }
+
+        .vod-grid-title {
+            font-size: 15px;
+            font-weight: 800;
+            color: #ffffff;
+            line-height: 1.25;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            word-break: break-word;
+            min-height: 38px;
+        }
+
+        .btn-vod-grid-play {
+            width: 100%;
+            min-height: 44px;
+            background: #15803d;
+            border: 2px solid #22c55e;
+            border-radius: 10px;
+            color: #ffffff;
+            font-size: 15px;
+            font-weight: 900;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            cursor: pointer;
+            transition: all 0.1s ease;
+        }
+        .btn-vod-grid-play:active {
+            transform: scale(0.96);
+            background: #22c55e;
+            color: #000000;
+        }
+
+        .btn-vod-grid-delete {
+            background: transparent;
+            border: none;
+            color: var(--red);
+            font-size: 13px;
+            font-weight: 700;
+            padding: 4px;
+            cursor: pointer;
+            text-align: center;
+            border-radius: 6px;
+        }
+        .btn-vod-grid-delete:active {
+            background: rgba(239, 68, 68, 0.2);
         }
 
         /* Seção Dedicada ao YouTube */
@@ -1777,6 +2039,16 @@
                 transition: transform 0.2s ease;
             }
 
+            /* Central de Memória e Downloads Desktop */
+            .downloads-modal-box {
+                max-width: 680px;
+                padding: 24px;
+            }
+            .vod-grid-2col {
+                grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+                gap: 16px;
+            }
+
             /* Grade de Canais Ao Vivo Desktop */
             .channels-list {
                 display: grid;
@@ -1830,16 +2102,21 @@
             <button style="background:transparent; border:none; color:var(--text-dim); font-size:24px; padding:4px;" onclick="dismissPWABanner()">✕</button>
         </div>
 
-        <!-- TOPO: Zona de Visão Passiva -->
-        <header class="glance-header">
+        <!-- TOPO: Zona de Visão Passiva e Central de Mídia Interativa -->
+        <header id="glance-header" class="glance-header interactive" onclick="openDownloadsModal()" role="button" tabindex="0" aria-label="Abrir Memória da TV e YouTube">
             <div class="clock-row">
                 <div id="clock-time" class="clock-time">--:--</div>
                 <div id="clock-date" class="clock-date">Carregando data...</div>
             </div>
-            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <div class="glance-status-row">
                 <div id="tv-status-badge" class="tv-status-badge" role="status" aria-live="polite">
                     <span>🟢</span>
                     <span id="tv-status-text">Conectando à TV...</span>
+                </div>
+                <div id="header-media-badge" class="header-media-badge">
+                    <span id="header-media-icon">📥</span>
+                    <span id="header-media-text">Memória da TV & YouTube</span>
+                    <span style="font-size: 14px; opacity: 0.8;">▾</span>
                 </div>
             </div>
         </header>
@@ -1860,84 +2137,43 @@
         <!-- Banner de Confirmação de Ação (Aviso Longo) -->
         <div id="action-banner" class="action-banner" role="status" aria-live="polite"></div>
 
+        <!-- Cartão Global: Filme Passando Agora na TV -->
+        <div id="vod-active-card" class="now-playing-card" style="display: none;">
+            <div class="now-playing-label">
+                <span class="pulsing-dot"></span>
+                PASSANDO AGORA NO CINEMA DA TV
+            </div>
+            <div id="vod-active-title" class="now-playing-title">Carregando filme...</div>
+            <div class="now-playing-subtext">Modo Cinema • Controle de Pausa na TV</div>
+            <button class="btn-return-live" onclick="returnToLiveTv()">
+                📺 VOLTAR PARA A TV AO VIVO
+            </button>
+        </div>
+
+        <!-- Cartão Global: Vídeo do YouTube Passando Agora na TV -->
+        <div id="yt-active-card" class="yt-active-card" style="display: none;">
+            <div class="now-playing-label" style="color: #f87171;">
+                <span class="pulsing-dot" style="background: #ef4444;"></span>
+                PASSANDO AGORA NO YOUTUBE DA TV
+            </div>
+            <div style="display: flex; gap: 14px; align-items: center;">
+                <img id="yt-active-thumb" style="width: 80px; height: 50px; border-radius: 8px; object-fit: cover; background: #000; border: 2px solid rgba(255,255,255,0.2);" src="" alt="">
+                <div style="flex: 1; min-width: 0;">
+                    <div id="yt-active-title" class="now-playing-title" style="font-size: 20px;">Vídeo do YouTube</div>
+                    <div id="yt-active-meta" class="now-playing-subtext" style="color: #cbd5e1;">Reproduzindo diretamente na TV</div>
+                </div>
+            </div>
+            <button class="btn-return-live" onclick="returnToLiveTv()">
+                📺 VOLTAR PARA A TV AO VIVO
+            </button>
+        </div>
+
         <!-- ==================== ÁREA DO MODO CINEMA & FILMES ==================== -->
         <div id="section-cinema" style="display: flex; flex-direction: column; gap: 18px;">
 
-            <!-- Cartão: Filme Passando Agora na TV -->
-            <div id="vod-active-card" class="now-playing-card" style="display: none;">
-                <div class="now-playing-label">
-                    <span class="pulsing-dot"></span>
-                    PASSANDO AGORA NO CINEMA DA TV
-                </div>
-                <div id="vod-active-title" class="now-playing-title">Carregando filme...</div>
-                <div class="now-playing-subtext">Modo Cinema • Controle de Pausa na TV</div>
-                <button class="btn-return-live" onclick="returnToLiveTv()">
-                    📺 VOLTAR PARA A TV AO VIVO
-                </button>
-            </div>
-
-            <!-- Cartão: Vídeo do YouTube Passando Agora na TV -->
-            <div id="yt-active-card" class="yt-active-card" style="display: none;">
-                <div class="now-playing-label" style="color: #f87171;">
-                    <span class="pulsing-dot" style="background: #ef4444;"></span>
-                    PASSANDO AGORA NO YOUTUBE DA TV
-                </div>
-                <div style="display: flex; gap: 14px; align-items: center;">
-                    <img id="yt-active-thumb" style="width: 80px; height: 50px; border-radius: 8px; object-fit: cover; background: #000; border: 2px solid rgba(255,255,255,0.2);" src="" alt="">
-                    <div style="flex: 1; min-width: 0;">
-                        <div id="yt-active-title" class="now-playing-title" style="font-size: 20px;">Vídeo do YouTube</div>
-                        <div id="yt-active-meta" class="now-playing-subtext" style="color: #cbd5e1;">Reproduzindo diretamente na TV</div>
-                    </div>
-                </div>
-                <button class="btn-return-live" onclick="returnToLiveTv()">
-                    📺 VOLTAR PARA A TV AO VIVO
-                </button>
-            </div>
-
-            <!-- Seção 1: Filmes Prontos na Memória (VOD Shelf) -->
-            <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-                <div class="section-title">🎬 Filmes Prontos para Assistir:</div>
-                <div style="display: flex; gap: 8px; align-items: center;">
-                    <button id="btn-notify-toggle" onclick="requestNotificationPermission()" style="font-size: 13px; font-weight: 800; color: #fff; background: rgba(56,189,248,0.15); padding: 4px 10px; border-radius: 8px; border: 1.5px solid var(--accent); cursor: pointer;" title="Ativar Notificações de Filmes Prontos">
-                        🔔 Avisar quando pronto
-                    </button>
-                    <div id="vod-disk-badge" style="font-size: 15px; font-weight: 800; color: var(--gold); background: rgba(250,204,21,0.1); padding: 4px 10px; border-radius: 8px; border: 1.5px solid var(--gold);">
-                        💾 Espaço TV
-                    </div>
-                </div>
-            </div>
-
-            <div id="vod-shelf-list" class="vod-shelf-section">
-                <div style="text-align: center; padding: 30px 10px; color: var(--text-muted); font-size: 18px;">
-                    Verificando filmes salvos na TV...
-                </div>
-            </div>
-
-            <!-- Seção Especial: Assistir Vídeo ou Música do YouTube na TV -->
-            <div class="yt-section-card">
-                <div class="yt-header-row">
-                    <span style="font-size: 28px;">▶️</span>
-                    <div class="yt-header-title">Assistir Vídeo ou Música do YouTube na TV:</div>
-                </div>
-                <div class="search-box-wrapper">
-                    <input id="yt-url-input" class="senior-search-input" type="text"
-                           placeholder="Cole o link do YouTube aqui (ex: https://youtu.be/...)"
-                           oninput="onYtInput(this.value)" autocomplete="off">
-                    <button id="yt-clear-btn" class="btn-clear-search" onclick="clearYtInput()" style="display: none;" title="Limpar link">✕</button>
-                </div>
-                <div class="yt-actions-row">
-                    <button id="btn-yt-live" class="btn-yt-action btn-yt-live" onclick="playYouTubeLive()">
-                        ▶️ ASSISTIR AGORA NA TV
-                    </button>
-                    <button id="btn-yt-save" class="btn-yt-action btn-yt-save" onclick="saveYouTubeVod()">
-                        📥 SALVAR NO CINEMA (COM PAUSA)
-                    </button>
-                </div>
-            </div>
-
-            <!-- Seção 2: Catálogo de Novos Filmes -->
-            <div class="section-header" style="margin-top: 10px;">
-                <div class="section-title">🔎 Escolher Outro Filme no Catálogo:</div>
+            <!-- Seção: Catálogo de Filmes -->
+            <div class="section-header" style="margin-top: 4px;">
+                <div class="section-title">🎬 Escolha o Filme para Assistir:</div>
             </div>
 
             <!-- Campo de Busca de Filmes com Botão Limpar -->
@@ -2037,16 +2273,10 @@
 
     </div>
 
-    <!-- BASE FIXA: Zona do Polegar (Controles Adaptativos) -->
+    <!-- BASE FIXA: Zona do Polegar (Controles de Navegação e Topo) -->
     <div class="fixed-remote-bar">
         <div class="remote-controls-wrapper">
-            
-            <!-- Linha 1: Botão Unificado TV AO VIVO (Persistente em todas as abas) -->
-            <button id="btn-remote-live-tv" class="btn-remote-live-tv" onclick="unifiedLiveAndReconnectTv()" aria-label="Voltar para TV Ao Vivo e Atualizar Conexão">
-                📺 TV AO VIVO
-            </button>
-
-            <!-- Linha 2: Paginação e Voltar ao Topo -->
+            <!-- Paginação e Voltar ao Topo -->
             <div class="remote-row">
                 <button id="btn-remote-prev-page" class="btn-remote btn-remote-nav" onclick="prevPage()" aria-label="Página anterior">
                     <span>◄</span> ANTERIOR
@@ -2057,6 +2287,76 @@
                 <button id="btn-remote-next-page" class="btn-remote btn-remote-nav" onclick="nextPage()" aria-label="Próxima página">
                     PRÓXIMO <span>►</span>
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL / CENTRAL DE MEMÓRIA DA TV E YOUTUBE -->
+    <div id="downloads-modal" class="senior-modal" onclick="closeDownloadsModal()" role="dialog" aria-modal="true" aria-label="Memória da TV e YouTube" style="display: none;">
+        <div class="downloads-modal-box" onclick="event.stopPropagation()">
+            <!-- Cabeçalho da Gaveta -->
+            <div class="downloads-modal-header">
+                <div style="display: flex; align-items: center; gap: 12px; min-width: 0;">
+                    <span style="font-size: 28px; flex-shrink: 0;">📥</span>
+                    <div style="min-width: 0;">
+                        <div class="downloads-modal-title">Memória da TV & YouTube</div>
+                        <div id="vod-disk-badge" class="vod-disk-badge">
+                            💾 Espaço TV: Verificando...
+                        </div>
+                    </div>
+                </div>
+                <button class="modal-close-icon-btn" onclick="closeDownloadsModal()" aria-label="Fechar Memória da TV">✕</button>
+            </div>
+
+            <!-- Corpo Rolável da Gaveta -->
+            <div class="downloads-modal-body">
+
+                <!-- Bloco 1: Assistir ou Baixar do YouTube na TV -->
+                <div class="yt-section-card">
+                    <div class="yt-header-row">
+                        <span style="font-size: 26px;">▶️</span>
+                        <div class="yt-header-title">Assistir Vídeo ou Música do YouTube na TV:</div>
+                    </div>
+                    <div class="search-box-wrapper">
+                        <input id="yt-url-input" class="senior-search-input" type="text"
+                               placeholder="Cole o link do YouTube aqui (ex: https://youtu.be/...)"
+                               oninput="onYtInput(this.value)" autocomplete="off">
+                        <button id="yt-clear-btn" class="btn-clear-search" onclick="clearYtInput()" style="display: none;" title="Limpar link">✕</button>
+                    </div>
+                    <div class="yt-actions-row">
+                        <button id="btn-yt-live" class="btn-yt-action btn-yt-live" onclick="playYouTubeLive()">
+                            ▶️ ASSISTIR AGORA NA TV
+                        </button>
+                        <button id="btn-yt-save" class="btn-yt-action btn-yt-save" onclick="saveYouTubeVod()">
+                            📥 SALVAR NO CINEMA (COM PAUSA)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Bloco 2: Downloads em Andamento (Largura Total para Máxima Legibilidade) -->
+                <div id="active-downloads-section" style="display: none;">
+                    <div class="section-title" style="margin-bottom: 8px; color: var(--gold);">
+                        ⏳ Baixando Agora para a TV:
+                    </div>
+                    <div id="active-downloads-list" class="active-downloads-list"></div>
+                </div>
+
+                <!-- Bloco 3: Filmes e Séries Prontos para Assistir (Grid de 2 Colunas) -->
+                <div>
+                    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+                        <div class="section-title">🎬 Prontos na Memória da TV:</div>
+                        <button id="btn-notify-toggle" onclick="requestNotificationPermission()" style="font-size: 13px; font-weight: 800; color: #fff; background: rgba(56,189,248,0.15); padding: 5px 12px; border-radius: 8px; border: 1.5px solid var(--accent); cursor: pointer;" title="Ativar Notificações de Filmes Prontos">
+                            🔔 Avisar quando pronto
+                        </button>
+                    </div>
+                    
+                    <div id="vod-shelf-list" class="vod-grid-2col">
+                        <div style="text-align: center; padding: 24px 10px; color: var(--text-muted); font-size: 17px; grid-column: 1 / -1;">
+                            Verificando filmes salvos na TV...
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -2725,6 +3025,24 @@
             }
         }
 
+        // Controle de Abertura e Fechamento da Central de Memória da TV e YouTube
+        function openDownloadsModal() {
+            triggerHaptic();
+            const modal = document.getElementById('downloads-modal');
+            if (modal) {
+                modal.style.display = 'flex';
+                document.body.style.overflow = 'hidden';
+            }
+        }
+
+        function closeDownloadsModal() {
+            const modal = document.getElementById('downloads-modal');
+            if (modal) {
+                modal.style.display = 'none';
+                document.body.style.overflow = '';
+            }
+        }
+
         // Carrega Filmes Salvos da TV (/api/vod/status)
         async function pollVodStatus() {
             try {
@@ -2735,7 +3053,7 @@
                 activeVodTask = data.active_vod;
                 vodTasks = data.tasks || [];
 
-                // 1. Atualiza Banner de Filme no Ar
+                // 1. Atualiza Banner de Filme no Ar (Global)
                 const vodCard = document.getElementById('vod-active-card');
                 const vodTitle = document.getElementById('vod-active-title');
 
@@ -2754,8 +3072,33 @@
                     diskBadge.innerHTML = `💾 Espaço TV: <strong>${data.disk.free_gb} GB livres</strong> de ${data.disk.total_gb} GB`;
                 }
 
-                // 3. Notificação Automática quando um Filme termina o download e fica pronto
+                // 3. Atualiza Badge Dinâmica de Mídia no Glance Header
+                const headerMediaBadge = document.getElementById('header-media-badge');
+                const headerMediaText = document.getElementById('header-media-text');
+                const headerMediaIcon = document.getElementById('header-media-icon');
+
+                const inProgressTasks = vodTasks.filter(t => ['processing', 'queued', 'pending', 'downloading', 'converting'].includes(t.status));
                 const readyTasks = vodTasks.filter(t => t.status === 'ready');
+
+                if (headerMediaBadge && headerMediaText) {
+                    if (inProgressTasks.length > 0) {
+                        const topTask = inProgressTasks[0];
+                        const prog = topTask.progress ? Math.round(topTask.progress) : 0;
+                        headerMediaBadge.className = 'header-media-badge downloading';
+                        if (headerMediaIcon) headerMediaIcon.innerText = '📥';
+                        headerMediaText.innerHTML = `Baixando (${prog}%)${topTask.speed ? ' • ' + escapeHtml(topTask.speed) : ''}`;
+                    } else if (readyTasks.length > 0) {
+                        headerMediaBadge.className = 'header-media-badge has-ready';
+                        if (headerMediaIcon) headerMediaIcon.innerText = '💾';
+                        headerMediaText.innerText = `${readyTasks.length} ${readyTasks.length === 1 ? 'Salvo na TV' : 'Salvos na TV'}`;
+                    } else {
+                        headerMediaBadge.className = 'header-media-badge';
+                        if (headerMediaIcon) headerMediaIcon.innerText = '📥';
+                        headerMediaText.innerText = 'Memória da TV & YouTube';
+                    }
+                }
+
+                // 4. Notificação Automática quando um Filme termina o download e fica pronto
                 if (knownReadyTasks === null) {
                     // Inicialização silenciosa para não disparar notificações de downloads antigos
                     knownReadyTasks = new Set(readyTasks.map(t => String(t.id)));
@@ -2764,9 +3107,9 @@
                         const sid = String(task.id);
                         if (!knownReadyTasks.has(sid)) {
                             knownReadyTasks.add(sid);
-                            const name = task.title || task.display_name || 'Filme';
-                            notifyUser('🍿 Filme Pronto no Cinema da TV!', `"${name}" já terminou de baixar e está pronto para assistir!`, '/?tab=vod');
-                            showActionBanner(`🍿 <strong>${escapeHtml(name)}</strong> pronto no Cinema!`, 'success');
+                            const name = task.title || task.display_name || 'Vídeo';
+                            notifyUser('🍿 Conteúdo Pronto na TV!', `"${name}" já terminou de baixar e está pronto para assistir!`, '/?tab=vod');
+                            showActionBanner(`🍿 <strong>${escapeHtml(name)}</strong> pronto na TV!`, 'success');
                         }
                     });
                 }
@@ -2777,8 +3120,9 @@
 
         // Renderiza a Prateleira de Filmes Prontos e em Download
         function renderVodShelf() {
+            const activeSec = document.getElementById('active-downloads-section');
+            const activeList = document.getElementById('active-downloads-list');
             const shelf = document.getElementById('vod-shelf-list');
-            if (!shelf) return;
 
             // Ordena tarefas para que os VODs mais recentes fiquem no topo da pilha
             const sortByRecent = (a, b) => {
@@ -2792,122 +3136,146 @@
             const inProgressTasks = vodTasks.filter(t => ['processing', 'queued', 'pending', 'downloading', 'converting'].includes(t.status)).sort(sortByRecent);
             const errorTasks = vodTasks.filter(t => t.status === 'error').sort(sortByRecent);
 
-            if (readyTasks.length === 0 && inProgressTasks.length === 0 && errorTasks.length === 0) {
+            // 1. Renderiza Fila de Downloads Ativos e Falhas (Largura Total para Máxima Legibilidade)
+            if (activeSec && activeList) {
+                if (inProgressTasks.length > 0 || errorTasks.length > 0) {
+                    activeSec.style.display = 'block';
+                    let activeHtml = '';
+
+                    // Downloads em andamento
+                    inProgressTasks.forEach(task => {
+                        const title = escapeHtml(task.title || task.display_name || 'Vídeo');
+                        const safeId = escapeHtml(task.id);
+                        const prog = task.progress ? Math.round(task.progress) : 0;
+                        const statusMsg = escapeHtml(task.status_msg || 'Baixando e preparando para a TV...');
+                        const speed = task.speed ? escapeHtml(task.speed) : '';
+
+                        let routeHtml = '';
+                        const urlLower = (task.url || '').toLowerCase();
+                        const isYt = urlLower.includes('youtube.com') || urlLower.includes('youtu.be') || title.toLowerCase().includes('youtube');
+                        const isProxy = (task.status_msg || '').toLowerCase().includes('residencial') || (task.status_msg || '').toLowerCase().includes('proxy');
+
+                        if (isYt) {
+                            routeHtml = `<span class="badge-route badge-yt">▶️ Vídeo do YouTube</span>`;
+                        } else if (isProxy) {
+                            routeHtml = `<span class="badge-route badge-proxy">📶 Conexão via Proxy Tablet</span>`;
+                        } else {
+                            routeHtml = `<span class="badge-route badge-direct">⚡ Download Direto Rápido</span>`;
+                        }
+
+                        const posterImg = task.poster 
+                            ? `<img class="vod-poster-thumb" src="${escapeHtml(task.poster)}" alt="" onerror="this.outerHTML='<div class=\\'vod-poster-thumb\\'>⏳</div>'">`
+                            : `<div class="vod-poster-thumb">⏳</div>`;
+
+                        activeHtml += `
+                            <div class="vod-movie-card vod-downloading-card" role="region" aria-label="Baixando ${title}">
+                                <div class="vod-card-top">
+                                    ${posterImg}
+                                    <div class="vod-details">
+                                        <div class="vod-title">${title}</div>
+                                        <div class="vod-badges-row">
+                                            ${routeHtml}
+                                            <span class="badge-pct">${prog}%</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="vod-status-detail">💬 ${statusMsg}</div>
+                                ${speed ? `<div class="vod-speed-detail">🚀 Velocidade: ${speed}</div>` : ''}
+
+                                <div class="vod-progress-bar-wrap" role="progressbar" aria-valuenow="${prog}" aria-valuemin="0" aria-valuemax="100">
+                                    <div class="vod-progress-bar-fill" style="width: ${prog}%;"></div>
+                                </div>
+
+                                <div style="display: flex; justify-content: flex-end; margin-top: 6px;">
+                                    <button class="btn-cancel-vod" onclick="cancelVodTask('${safeId}', '${title}')">
+                                        ✕ Cancelar Download
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    });
+
+                    // Falhas
+                    errorTasks.forEach(task => {
+                        const title = escapeHtml(task.title || task.display_name || 'Vídeo');
+                        const safeId = escapeHtml(task.id);
+                        const errMsg = escapeHtml(task.error || task.status_msg || 'Erro ao preparar vídeo');
+                        activeHtml += `
+                            <div class="vod-movie-card" style="border-color: #ef4444; background: #1e1b2e;">
+                                <div class="vod-card-top">
+                                    <div class="vod-poster-thumb" style="background: rgba(239,68,68,0.2); color: #ef4444;">⚠️</div>
+                                    <div class="vod-details">
+                                        <div class="vod-title">${title}</div>
+                                        <div class="vod-meta" style="color: #f87171;">Não foi possível baixar: ${errMsg}</div>
+                                    </div>
+                                </div>
+                                <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
+                                    <button class="btn-delete-vod" onclick="deleteVodTask('${safeId}', '${title}')">
+                                        ✕ Remover da Lista
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    });
+
+                    activeList.innerHTML = activeHtml;
+                } else {
+                    activeSec.style.display = 'none';
+                    activeList.innerHTML = '';
+                }
+            }
+
+            // 2. Renderiza Prateleira de Prontos na Grade de 2 Colunas
+            if (!shelf) return;
+
+            if (readyTasks.length === 0) {
                 shelf.innerHTML = `
-                    <div style="text-align: center; padding: 24px 16px; background: var(--surface); border: 2px dashed var(--border); border-radius: var(--btn-radius); color: var(--text-muted); font-size: 18px; line-height: 1.5;">
-                        🍿 Nenhum filme pronto na TV no momento.<br>
-                        <strong>Escolha um filme no catálogo abaixo ou cole um vídeo do YouTube!</strong>
+                    <div style="text-align: center; padding: 26px 14px; background: var(--surface); border: 2px dashed var(--border); border-radius: var(--btn-radius); color: var(--text-muted); font-size: 16px; line-height: 1.5; grid-column: 1 / -1;">
+                        🍿 Nenhum filme ou série pronto na TV no momento.<br>
+                        <strong>Escolha um título no catálogo de Filmes ou Séries, ou cole um link do YouTube acima!</strong>
                     </div>
                 `;
                 return;
             }
 
             let html = '';
-
-            // 1. Filmes em download/preparação na TV
-            inProgressTasks.forEach(task => {
-                const title = escapeHtml(task.title || task.display_name || 'Filme');
+            readyTasks.forEach(task => {
+                const isPlaying = (task.id === activeVodTask);
+                const title = escapeHtml(task.title || task.display_name || 'Vídeo');
                 const safeId = escapeHtml(task.id);
-                const prog = task.progress ? Math.round(task.progress) : 0;
-                const statusMsg = escapeHtml(task.status_msg || 'Baixando e preparando filme para a TV...');
-                const speed = task.speed ? escapeHtml(task.speed) : '';
 
-                // Determina rota de conexão com base no status e URL
-                let routeHtml = '';
                 const urlLower = (task.url || '').toLowerCase();
                 const isYt = urlLower.includes('youtube.com') || urlLower.includes('youtu.be') || title.toLowerCase().includes('youtube');
-                const isProxy = (task.status_msg || '').toLowerCase().includes('residencial') || (task.status_msg || '').toLowerCase().includes('proxy');
+                const isSeries = title.includes(' - ') || title.toLowerCase().includes('temporada') || title.toLowerCase().includes('episodio') || title.toLowerCase().includes('ep ');
 
-                if (isYt) {
-                    routeHtml = `<span class="badge-route badge-yt">▶️ Vídeo do YouTube</span>`;
-                } else if (isProxy) {
-                    routeHtml = `<span class="badge-route badge-proxy">📶 Conexão via Proxy Tablet</span>`;
+                let badgeHtml = '';
+                if (isPlaying) {
+                    badgeHtml = `<span class="vod-grid-badge live-active">● NO AR NA TV</span>`;
+                } else if (isYt) {
+                    badgeHtml = `<span class="vod-grid-badge" style="background:#ef4444; border-color:#f87171;">▶️ YOUTUBE</span>`;
+                } else if (isSeries) {
+                    badgeHtml = `<span class="vod-grid-badge" style="background:#7c3aed; border-color:#a78bfa;">🍿 SÉRIE</span>`;
                 } else {
-                    routeHtml = `<span class="badge-route badge-direct">⚡ Download Direto Rápido</span>`;
+                    badgeHtml = `<span class="vod-grid-badge">🎬 FILME</span>`;
                 }
 
                 const posterImg = task.poster 
-                    ? `<img class="vod-poster-thumb" src="${escapeHtml(task.poster)}" alt="" onerror="this.outerHTML='<div class=\'vod-poster-thumb\'>⏳</div>'">`
-                    : `<div class="vod-poster-thumb">⏳</div>`;
+                    ? `<img class="vod-grid-poster-img" src="${escapeHtml(task.poster)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=\\'vod-grid-poster-fallback\\'>🎬</div>'">`
+                    : `<div class="vod-grid-poster-fallback">🎬</div>`;
 
                 html += `
-                    <div class="vod-movie-card vod-downloading-card" role="region" aria-label="Baixando filme ${title}">
-                        <div class="vod-card-top">
+                    <div class="vod-grid-card ${isPlaying ? 'active' : ''}" role="region" aria-label="${title}">
+                        <div class="vod-grid-poster-wrap">
                             ${posterImg}
-                            <div class="vod-details">
-                                <div class="vod-title">${title}</div>
-                                <div class="vod-badges-row">
-                                    ${routeHtml}
-                                    <span class="badge-pct">${prog}%</span>
-                                </div>
-                            </div>
+                            ${badgeHtml}
                         </div>
-
-                        <div class="vod-status-detail">💬 ${statusMsg}</div>
-                        ${speed ? `<div class="vod-speed-detail">🚀 Velocidade: ${speed}</div>` : ''}
-
-                        <div class="vod-progress-bar-wrap" role="progressbar" aria-valuenow="${prog}" aria-valuemin="0" aria-valuemax="100">
-                            <div class="vod-progress-bar-fill" style="width: ${prog}%;"></div>
-                        </div>
-
-                        <div style="display: flex; justify-content: flex-end; margin-top: 6px;">
-                            <button class="btn-cancel-vod" onclick="cancelVodTask('${safeId}', '${title}')">
-                                ✕ Cancelar Download
+                        <div class="vod-grid-body">
+                            <div class="vod-grid-title" title="${title}">${title}</div>
+                            <button class="btn-vod-grid-play" onclick="playVodTask('${safeId}', '${title}')" aria-label="Assistir ${title} na TV">
+                                ▶️ ASSISTIR
                             </button>
-                        </div>
-                    </div>
-                `;
-            });
-
-            // 2. Tarefas que falharam
-            errorTasks.forEach(task => {
-                const title = escapeHtml(task.title || task.display_name || 'Filme');
-                const safeId = escapeHtml(task.id);
-                const errMsg = escapeHtml(task.error || task.status_msg || 'Erro ao preparar filme');
-                html += `
-                    <div class="vod-movie-card" style="border-color: #ef4444; background: #1e1b2e;">
-                        <div class="vod-card-top">
-                            <div class="vod-poster-thumb" style="background: rgba(239,68,68,0.2); color: #ef4444;">⚠️</div>
-                            <div class="vod-details">
-                                <div class="vod-title">${title}</div>
-                                <div class="vod-meta" style="color: #f87171;">Não foi possível baixar: ${errMsg}</div>
-                            </div>
-                        </div>
-                        <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
-                            <button class="btn-delete-vod" onclick="deleteVodTask('${safeId}', '${title}')">
-                                ✕ Remover da Lista
-                            </button>
-                        </div>
-                    </div>
-                `;
-            });
-
-            // 3. Filmes prontos para assistir na TV
-            readyTasks.forEach(task => {
-                const isPlaying = (task.id === activeVodTask);
-                const title = escapeHtml(task.title || task.display_name || 'Filme');
-                const safeId = escapeHtml(task.id);
-                const posterImg = task.poster 
-                    ? `<img class="vod-poster-thumb" src="${escapeHtml(task.poster)}" alt="" onerror="this.outerHTML='<div class=\'vod-poster-thumb\'>🎬</div>'">`
-                    : `<div class="vod-poster-thumb">🎬</div>`;
-
-                html += `
-                    <div class="vod-movie-card ${isPlaying ? 'active' : ''}" tabindex="0" role="region" aria-label="Filme ${title}">
-                        <div class="vod-card-top">
-                            ${posterImg}
-                            <div class="vod-details">
-                                <div class="vod-title">${title}</div>
-                                <div class="vod-meta">${isPlaying ? '● Assistindo Agora na TV' : 'Filme Completo • Pronto para Assistir'}</div>
-                            </div>
-                        </div>
-                        <div class="vod-actions-dual">
-                            <button class="btn-play-vod-giant" onclick="playVodTask('${safeId}', '${title}')">
-                                📺 ASSISTIR NA TV
-                            </button>
-                        </div>
-                        <div class="vod-card-footer">
-                            <span style="font-size: 16px; color: var(--text-dim);">Pronto na memória da TV</span>
-                            <button class="btn-delete-vod" onclick="deleteVodTask('${safeId}', '${title}')">
+                            <button class="btn-vod-grid-delete" onclick="deleteVodTask('${safeId}', '${title}')" aria-label="Excluir ${title}">
                                 🗑️ Excluir
                             </button>
                         </div>
@@ -3113,8 +3481,8 @@
                 window.history.replaceState({}, document.title, window.location.pathname);
             } catch (e) {}
 
-            // Alterna para Modo Cinema
-            switchAppMode('cinema');
+            // Abre a Central de Memória da TV & YouTube
+            openDownloadsModal();
             triggerHaptic();
             if (typeof requestNotificationPermission === 'function') {
                 requestNotificationPermission();
@@ -3134,14 +3502,6 @@
                 input.value = targetUrl;
                 onYtInput(targetUrl);
             }
-
-            // Rola até a prateleira do Cinema
-            setTimeout(() => {
-                const shelf = document.getElementById('vod-shelf-list');
-                if (shelf) {
-                    shelf.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }
-            }, 300);
 
             // Envia requisição para preparar o VOD em segundo plano sem afetar a TV
             const pin = getAuthPin();
@@ -3886,6 +4246,7 @@
                     <div class="channel-info">
                         <div class="channel-name">${safeName}</div>
                         <div class="channel-category">${safeCategory}</div>
+                    </div>
                     <div class="channel-actions-row">
                         <button class="channel-fav-btn ${isFav ? 'is-fav' : ''}" 
                                 title="Favoritar" 
@@ -4153,34 +4514,10 @@
             }
         }
 
-        // Ocultar barra fixa no scroll down e exibir no scroll up (Web e Mobile)
+        // Barra fixa inferior: Mantida permanentemente visível (sem ocultação no scroll)
         function setupScrollListeners() {
-            let lastScrollY = window.pageYOffset || document.documentElement.scrollTop;
-            const threshold = 10;
             const bar = document.querySelector('.fixed-remote-bar');
-            if (!bar) return;
-
-            window.addEventListener('scroll', () => {
-                const currentScrollY = window.pageYOffset || document.documentElement.scrollTop;
-
-                // Sempre visível próximo ao topo (< 60px)
-                if (currentScrollY <= 60) {
-                    bar.classList.remove('hidden-down');
-                    lastScrollY = currentScrollY;
-                    return;
-                }
-
-                // Scroll Down -> oculta
-                if (currentScrollY > lastScrollY + threshold) {
-                    bar.classList.add('hidden-down');
-                }
-                // Scroll Up -> exibe
-                else if (currentScrollY < lastScrollY - threshold) {
-                    bar.classList.remove('hidden-down');
-                }
-
-                lastScrollY = currentScrollY;
-            }, { passive: true });
+            if (bar) bar.classList.remove('hidden-down');
         }
 
         // Botão Unificado Principal: Voltar para TV Ao Vivo E Atualizar Conexão da TV
@@ -4311,6 +4648,12 @@
         // Navegação por Teclado e D-Pad de TV Box / Desktop
         window.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            if (e.key === 'Escape') {
+                closeDownloadsModal();
+                closeMovieModal();
+                closeSeriesModal();
+            }
 
             // Se o Web Player estiver aberto:
             const webModal = document.getElementById('web-player-modal');

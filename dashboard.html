@@ -1857,28 +1857,49 @@
             gap: 12px;
         }
         .episode-badge {
-            background: rgba(234, 179, 8, 0.2);
-            color: var(--gold);
-            border: 1.5px solid var(--gold);
-            padding: 6px 10px;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 900;
-            white-space: nowrap;
+            background: #1e293b;
+            color: #ffffff;
+            border: 2.5px solid #3b82f6;
+            min-width: 64px;
+            height: 58px;
+            padding: 4px 6px;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
             flex-shrink: 0;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+        }
+        .ep-badge-label {
+            font-size: 11px;
+            font-weight: 900;
+            color: #93c5fd;
+            line-height: 1;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+        .ep-badge-num {
+            font-size: 26px;
+            font-weight: 900;
+            color: #ffffff;
+            line-height: 1.1;
+            font-variant-numeric: tabular-nums;
         }
         .episode-title-group {
             flex: 1;
             min-width: 0;
         }
         .episode-title {
-            font-size: 17px;
+            font-size: 18px;
             font-weight: 800;
             color: #ffffff;
             line-height: 1.3;
             overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            white-space: normal;
         }
         .episode-duration {
             font-size: 13px;
@@ -1890,9 +1911,25 @@
             border-color: #22c55e;
             background: rgba(34, 197, 94, 0.08);
         }
+        .episode-card.is-ready .episode-badge {
+            background: #14532d;
+            border-color: #22c55e;
+            box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+        }
+        .episode-card.is-ready .ep-badge-label {
+            color: #86efac;
+        }
         .episode-card.is-downloading {
             border-color: var(--gold);
             background: rgba(250, 204, 21, 0.08);
+        }
+        .episode-card.is-downloading .episode-badge {
+            background: #713f12;
+            border-color: #facc15;
+            box-shadow: 0 4px 12px rgba(250, 204, 21, 0.3);
+        }
+        .episode-card.is-downloading .ep-badge-label {
+            color: #fef08a;
         }
         .episode-actions-row {
             display: flex;
@@ -4879,19 +4916,36 @@
                     return;
                 }
 
+                // Identifica se há episódios salvos ou baixando nesta série para abrir direto na temporada correta
+                let targetSeasonNum = data.seasons[0].season_number;
+                let hasSaved = false;
+
+                for (const s of data.seasons) {
+                    if (s.episodes && s.episodes.length) {
+                        for (const ep of s.episodes) {
+                            const task = findTaskForEpisode(ep);
+                            if (task && (task.status === 'ready' || ['processing', 'queued', 'pending', 'downloading', 'converting'].includes(task.status))) {
+                                targetSeasonNum = s.season_number;
+                                hasSaved = true;
+                            }
+                        }
+                    }
+                }
+
                 // Renderiza Temporadas
                 let sHtml = '';
-                data.seasons.forEach((s, sIdx) => {
+                data.seasons.forEach((s) => {
+                    const isActive = String(s.season_number) === String(targetSeasonNum);
                     sHtml += `
-                        <div class="season-chip ${sIdx === 0 ? 'active' : ''}" onclick="selectSeason('${s.season_number}', this)">
+                        <div class="season-chip ${isActive ? 'active' : ''}" onclick="selectSeason('${s.season_number}', this)">
                             ${escapeHtml(s.name || 'Temporada ' + s.season_number)}
                         </div>
                     `;
                 });
                 if (seasonsBar) seasonsBar.innerHTML = sHtml;
 
-                // Renderiza episódios da 1ª temporada
-                renderEpisodesForSeason(data.seasons[0].season_number);
+                // Renderiza episódios e rola suavemente até o último episódio baixado
+                renderEpisodesForSeason(targetSeasonNum, hasSaved);
             } catch (err) {
                 if (epList) epList.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--red);">Erro ao carregar episódios. Tente novamente.</div>';
             }
@@ -4901,10 +4955,10 @@
             triggerHaptic();
             document.querySelectorAll('#series-seasons-bar .season-chip').forEach(c => c.classList.remove('active'));
             if (el) el.classList.add('active');
-            renderEpisodesForSeason(seasonNum);
+            renderEpisodesForSeason(seasonNum, true);
         }
 
-        function renderEpisodesForSeason(seasonNum) {
+        function renderEpisodesForSeason(seasonNum, autoScroll = false) {
             const epList = document.getElementById('series-episodes-list');
             if (!epList || !currentSeriesDetails) return;
 
@@ -4919,7 +4973,11 @@
             let html = '';
             season.episodes.forEach((ep, epIdx) => {
                 const epTitle = escapeHtml(ep.title || `Episódio ${ep.episode_num || epIdx + 1}`);
-                const epNumBadge = ep.episode_num ? `EP ${ep.episode_num}` : `EP ${epIdx + 1}`;
+                let epRawNum = (ep.episode_num != null && ep.episode_num !== '') ? ep.episode_num : (epIdx + 1);
+                let epNumStr = String(epRawNum);
+                if (/^\d+$/.test(epNumStr) && Number(epNumStr) < 10) {
+                    epNumStr = '0' + Number(epNumStr);
+                }
                 let epDur = (ep.duration && ep.duration !== '00:00:00' && ep.duration !== '0') ? ep.duration : 'HD';
                 if (typeof epDur === 'string' && epDur.startsWith('00:')) epDur = epDur.substring(3);
 
@@ -4960,10 +5018,17 @@
                     `;
                 }
 
+                const epNumBadge = `
+                    <div class="episode-badge" aria-label="Episódio ${escapeHtml(epNumStr)}">
+                        <span class="ep-badge-label">EP</span>
+                        <span class="ep-badge-num">${escapeHtml(epNumStr)}</span>
+                    </div>
+                `;
+
                 html += `
                     <div class="${cardClass}">
                         <div class="episode-main-info">
-                            <div class="episode-badge">${epNumBadge}</div>
+                            ${epNumBadge}
                             <div class="episode-title-group">
                                 <div class="episode-title">${epTitle}</div>
                                 <div class="episode-duration">⏱ ${escapeHtml(epDur)}</div>
@@ -4976,6 +5041,21 @@
                 `;
             });
             epList.innerHTML = html;
+
+            if (autoScroll) {
+                setTimeout(() => {
+                    const readyCards = epList.querySelectorAll('.episode-card.is-ready, .episode-card.is-downloading');
+                    if (readyCards.length > 0) {
+                        const targetCard = readyCards[readyCards.length - 1];
+                        const cardTop = targetCard.offsetTop - epList.offsetTop;
+                        const targetScroll = cardTop - (epList.clientHeight / 2) + (targetCard.clientHeight / 2);
+                        epList.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
+                        if (targetCard.scrollIntoView) {
+                            targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    }
+                }, 120);
+            }
         }
 
         function playSavedEpisode(taskId) {
@@ -5834,7 +5914,7 @@
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v15') caches.delete(k);
+                        if (k !== 'controle-tv-v16') caches.delete(k);
                     });
                 }).catch(() => {});
             }

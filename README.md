@@ -41,6 +41,10 @@ O sistema transforma um dispositivo Android antigo com suporte a OTG/USB Gadget 
   - Intervalo de PCR cravado em 20 ms (`-pcr_period 20`), garantindo travamento estável do PLL de 27 MHz da TV.
   - Áudio normalizado em Dolby Digital AC-3 estéreo a 48 kHz (padrão nativo do chip MStar).
 - **Controle Remoto Web / PWA**: Interface web responsiva instalável em qualquer smartphone, com troca de canais instantânea via *Make-Before-Break* (sem tela preta).
+- **Arquitetura VOD V2 com Dual-Cache & Prefetch Assíncrono**:
+  - **FUSE Head Pinning Cache (8 MB)**: Fixação em RAM dos primeiros 8 MB para resposta imediata (0 ms) de cabeçalhos e átomos MP4 (`moov`/`ftyp`), eliminando latência em seeks para a posição zero.
+  - **Dedicated Media Sliding Cache (16 MB)**: Double buffering com thread assíncrona de prefetch em blocos de 4 MB e conexões TCP persistentes com `TCP_NODELAY`, prevenindo travamentos e *buffer underruns*.
+  - **Deploy & Rollback Atômico a Quente**: Scripts com controle de concorrência por lock directory atômico e validação estrita de integridade ELF.
 - **Modos de Operação**:
   - **TV Ao Vivo (Live)**: Transmissão linear contínua.
   - **Cinema (VOD)**: Catálogo sob demanda integrado a YouTube / filmes MP4 locais.
@@ -70,23 +74,31 @@ usb-stream-tv-prod/
 │   │   ├── fuse_ntfs.c     # Implementação em C do FUSE NTFS
 │   │   ├── fuse_ntfs.h     # Definições de geometria e estruturas NTFS
 │   │   └── fuse_ntfs_arm32 # Binário estático compilado para ARM32
-│   ├── client/             # Ingestão de rede ultraleve
+│   ├── client/             # Ingestão de rede ultraleve e VOD Direct
+│   │   ├── fuse_direct_v2.c # Motor FUSE VOD v2 com Head Pinning Cache de 8MB e prefetch
 │   │   ├── stream_fetcher.c # Ingestor TCP socket sem overhead de libc
 │   │   └── stream_fetcher_arm32 # Binário estático para ARM32
 │   └── tools/              # Utilitários de patch de disco
 │       ├── patch_trp.c     # Patcher de MFT Inode 27 para alternar arquivos
 │       └── patch_trp_arm32 # Binário estático ARM32
-├── scripts/                # Scripts de controle no tablet
+├── scripts/                # Scripts de controle e upgrade no tablet
+│   ├── apply_vod_v2.sh     # Hot-upgrade atômico para VOD v2 com validação ELF
+│   ├── rollback_vod.sh     # Reversão determinística de 1 comando para VOD
 │   ├── deploy_tablet.sh    # Deploy automático via ADB
 │   ├── switch_tv_mode.sh   # Alternador de modos (Live, Cinema, Favoritos)
 │   ├── switch_live.sh      # Atalho para retorno ao Live
 │   ├── switch_vod.sh       # Alternador para Modo Cinema
 │   ├── reconnect_usb.sh    # Soft-reset do barramento USB
+│   ├── sync_youtube_cookies.sh # Sincronização de cookies YouTube do navegador
 │   └── tv_watchdog.sh      # Daemon de monitoramento, wakelock e CPU governor
+├── tests/                  # Bateria de testes de validação
+│   ├── test_vod_lock_and_elf.sh # Validação unitária de exclusão mútua e integridade ELF
+│   └── test_probe_sar.py   # Testes unitários do probe de aspect ratio / SAR anamórfico
 ├── templates/
 │   └── ntfs_template.tar.gz # Template esparso do sistema de arquivos NTFS (8.5 GB)
 └── docs/                   # Documentação detalhada
     ├── ARCHITECTURE.md     # Arquitetura do driver FUSE e pipeline
+    ├── VOD_ARCHITECTURE.md # Pipeline de engenharia VOD Cinema V2 e prefetch
     ├── DEPLOYMENT_GUIDE.md # Guia passo a passo de instalação
     ├── HARDWARE_SPECS.md   # Especificações do decodificador Samsung MStar 2013
     └── TROUBLESHOOTING.md  # Diagnóstico e solução de problemas

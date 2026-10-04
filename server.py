@@ -301,10 +301,10 @@ def probe_is_h264(url):
     """
     Verifica se o stream de entrada é estritamente H.264 compatível com Samsung PL51F4000.
     A TV Samsung Plasma PL51F4000 (2013) suporta H.264 até 1080p@30fps SDR 8-bit.
-    Canais com B-frames (has_b_frames > 0) ou >30fps causam congelamento na TV em modo copy
-    e exigem transcodificação obrigatória (libx264).
+    Canais com B-frames (has_b_frames > 0), >30fps ou SAR anamórfico causam congelamento/distorção
+    na TV em modo copy e exigem transcodificação obrigatória (libx264).
     """
-    if not url or not (url.startswith("http://") or url.startswith("https://")):
+    if not url or not (url.startswith("http://") or url.startswith("https://") or os.path.exists(url)):
         return False
     if url in CHANNEL_CODEC_CACHE:
         return CHANNEL_CODEC_CACHE[url]
@@ -313,14 +313,26 @@ def probe_is_h264(url):
             "ffprobe", "-v", "error", "-rw_timeout", "3000000",
             "-probesize", "500000", "-analyzeduration", "1000000",
             "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name,pix_fmt,r_frame_rate,has_b_frames",
-            "-of", "csv=p=0", url
+            "-show_entries", "stream=codec_name,pix_fmt,r_frame_rate,has_b_frames,sample_aspect_ratio",
+            "-of", "json", url
         ]
         out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=4).decode("utf-8").strip()
-        parts = [p.strip() for p in out.split(",")]
-        codec = parts[0].lower() if len(parts) > 0 else ""
-        fps_str = parts[2] if len(parts) > 2 else "30/1"
-        has_b_frames = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+        data = json.loads(out)
+        streams = data.get("streams", [])
+        if not streams:
+            CHANNEL_CODEC_CACHE[url] = False
+            return False
+        video_stream = streams[0]
+        sar = (video_stream.get('sample_aspect_ratio') or '').strip()
+        if sar and sar not in ('1:1', '1/1'):
+            CHANNEL_CODEC_CACHE[url] = False
+            return False
+        codec = (video_stream.get("codec_name") or "").lower()
+        fps_str = str(video_stream.get("r_frame_rate") or "30/1")
+        try:
+            has_b_frames = int(video_stream.get("has_b_frames") or 0)
+        except (ValueError, TypeError):
+            has_b_frames = 0
         try:
             num, den = map(float, fps_str.split("/"))
             fps = num / den if den != 0 else 30.0
@@ -1242,8 +1254,9 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_
         cmd.extend(["-stream_loop", "-1"])
 
     cmd.extend([
+        "-fflags", "+genpts+discardcorrupt",
         "-probesize", "1000000",
-        "-analyzeduration", "2000000"
+        "-analyzeduration", "1500000"
     ])
     if start_sec and start_sec > 0:
         cmd.extend(["-ss", str(int(start_sec))])
@@ -1252,13 +1265,14 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_
     # Input 1: Áudio DASH separado (YouTube 1080p)
     if audio_url:
         cmd.extend([
+            "-fflags", "+genpts+discardcorrupt",
             "-rw_timeout", "10000000",
             "-user_agent", "Mozilla/5.0",
             "-reconnect", "1",
             "-reconnect_streamed", "1",
             "-reconnect_delay_max", "5",
             "-probesize", "1000000",
-            "-analyzeduration", "2000000"
+            "-analyzeduration", "1500000"
         ])
         if not is_googlevideo and use_proxy and RESIDENTIAL_HTTP_PROXY:
             cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
@@ -2122,7 +2136,7 @@ def probe_vod_stream(url, use_proxy=False):
     probe_cmd = [
         "ffprobe", "-v", "error",
         "-headers", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n",
-        "-show_entries", "format=duration:stream=codec_type,codec_name,profile,level,pix_fmt,width,height,channels,sample_rate",
+        "-show_entries", "format=duration:stream=codec_type,codec_name,profile,level,pix_fmt,width,height,channels,sample_rate,sample_aspect_ratio,r_frame_rate",
         "-of", "json"
     ]
     if use_proxy and RESIDENTIAL_HTTP_PROXY and is_proxy_alive(RESIDENTIAL_HTTP_PROXY):
@@ -2314,7 +2328,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                 try:
                     probe_cmd = [
                         "ffprobe", "-v", "error", "-select_streams", "v:0",
-                        "-show_entries", "stream=codec_name,level,pix_fmt,width,height",
+                        "-show_entries", "stream=codec_name,level,pix_fmt,width,height,sample_aspect_ratio",
                         "-of", "json", raw_file
                     ]
                     v_meta = json.loads(subprocess.check_output(probe_cmd, text=True))
@@ -2324,7 +2338,9 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     lvl = int(st.get("level", 99) or 99)
                     w = int(st.get("width", 0) or 0)
                     h = int(st.get("height", 0) or 0)
-                    if codec in ("h264", "avc1") and pix in ("yuv420p", "yuvj420p", "") and lvl <= 42 and w <= 1920 and h <= 1080:
+                    sar = (st.get("sample_aspect_ratio") or "").strip()
+                    is_square_sar = sar in ("1:1", "1/1")
+                    if codec in ("h264", "avc1") and pix in ("yuv420p", "yuvj420p", "") and lvl <= 42 and w <= 1920 and h <= 1080 and is_square_sar:
                         can_copy_video = True
                 except Exception:
                     can_copy_video = False
@@ -2430,7 +2446,9 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     lvl = int(v_stream.get("level", 99) or 99)
                     w = int(v_stream.get("width", 0) or 0)
                     h = int(v_stream.get("height", 0) or 0)
-                    if codec in ("h264", "avc1") and pix in ("yuv420p", "yuvj420p", "") and lvl <= 42 and w <= 1920 and h <= 1080:
+                    sar = (v_stream.get("sample_aspect_ratio") or "").strip()
+                    is_square_sar = sar in ("1:1", "1/1")
+                    if codec in ("h264", "avc1") and pix in ("yuv420p", "yuvj420p", "") and lvl <= 42 and w <= 1920 and h <= 1080 and is_square_sar:
                         can_copy_video = True
 
                 cmd = ["ffmpeg", "-y"]
@@ -2593,6 +2611,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Auth-PIN, Range")
         self.send_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges")
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_HEAD(self):
@@ -3736,13 +3755,21 @@ self.addEventListener('message', (event) => {
             HUB.telemetry_time = time.time()
             cmd = HUB.pending_command
             HUB.pending_command = None
+            res = json.dumps({"success": True, "cmd": cmd}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
-            self.wfile.write(json.dumps({"success": True, "cmd": cmd}).encode("utf-8"))
+            self.wfile.write(res)
         except Exception as e:
+            res = json.dumps({"success": False, "error": str(e)}).encode("utf-8")
             self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
+            self.wfile.write(res)
 
     def handle_telemetry_result(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -3751,11 +3778,21 @@ self.addEventListener('message', (event) => {
             data = json.loads(body)
             HUB.command_output = data.get("output")
             HUB.command_done_event.set()
+            res = json.dumps({"success": True}).encode("utf-8")
             self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
-        except Exception:
+            self.wfile.write(res)
+        except Exception as e:
+            res = json.dumps({"success": False, "error": str(e)}).encode("utf-8")
             self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
+            self.wfile.write(res)
 
     def handle_remote_exec(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -3766,31 +3803,48 @@ self.addEventListener('message', (event) => {
             params = {}
         req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
         if AUTH_PIN and req_pin != AUTH_PIN:
+            res = json.dumps({"success": False, "error": "PIN incorreto"}).encode("utf-8")
             self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
+            self.wfile.write(res)
             return
         cmd = params.get("cmd")
         if not cmd:
+            res = json.dumps({"success": False, "error": "Comando ausente"}).encode("utf-8")
             self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
+            self.wfile.write(res)
             return
         HUB.command_done_event.clear()
         HUB.command_output = None
         HUB.pending_command = cmd
         HUB.command_done_event.wait(timeout=10.0)
+        res = json.dumps({"success": True, "output": HUB.command_output or "Timeout aguardando aparelho (está online?)."}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(res)))
         self.end_headers()
-        self.wfile.write(json.dumps({"success": True, "output": HUB.command_output or "Timeout aguardando aparelho (está online?)."}).encode("utf-8"))
+        self.wfile.write(res)
 
     def handle_tablet_cmd_res(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode("utf-8", errors="replace") if length > 0 else ""
         HUB.tablet_cmd_res = body
         HUB.tablet_cmd_event.set()
+        res = json.dumps({"success": True}).encode("utf-8")
         self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(res)))
         self.end_headers()
+        self.wfile.write(res)
 
     def handle_tablet_exec(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -3802,26 +3856,35 @@ self.addEventListener('message', (event) => {
 
         req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
         if AUTH_PIN and req_pin != AUTH_PIN:
+            res = json.dumps({"success": False, "error": "PIN incorreto"}).encode("utf-8")
             self.send_response(401)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
-            self.wfile.write(json.dumps({"success": False, "error": "PIN incorreto"}).encode("utf-8"))
+            self.wfile.write(res)
             return
         cmd = params.get("cmd")
         if not cmd:
+            res = json.dumps({"success": False, "error": "Comando ausente"}).encode("utf-8")
             self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
+            self.wfile.write(res)
             return
         HUB.tablet_cmd_event.clear()
         HUB.tablet_cmd_res = None
         HUB.tablet_pending_cmd = cmd
         HUB.tablet_cmd_event.wait(timeout=10.0)
+        res = json.dumps({"success": True, "output": HUB.tablet_cmd_res or "Timeout aguardando tablet (watchdog ativo?)."}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(res)))
         self.end_headers()
-        self.wfile.write(json.dumps({"success": True, "output": HUB.tablet_cmd_res or "Timeout aguardando tablet (watchdog ativo?)."}).encode("utf-8"))
+        self.wfile.write(res)
 
     def handle_reset_epoch(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -3832,15 +3895,22 @@ self.addEventListener('message', (event) => {
             params = {}
         req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
         if AUTH_PIN and req_pin != AUTH_PIN:
+            res = json.dumps({"success": False, "error": "PIN incorreto"}).encode("utf-8")
             self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
+            self.wfile.write(res)
             return
         HUB.reset_pts_epoch()
+        res = json.dumps({"success": True, "message": "PTS epoch reset to 3.0s"}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(res)))
         self.end_headers()
-        self.wfile.write(json.dumps({"success": True, "message": "PTS epoch reset to 3.0s"}).encode("utf-8"))
+        self.wfile.write(res)
 
     def handle_usb_reconnect(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -3851,35 +3921,44 @@ self.addEventListener('message', (event) => {
             params = {}
         req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
         if AUTH_PIN and req_pin != AUTH_PIN:
+            res = json.dumps({"success": False, "error": "PIN incorreto"}).encode("utf-8")
             self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
+            self.wfile.write(res)
             return
 
         global LAST_RECONNECT_TIME
         now = time.time()
         if now - LAST_RECONNECT_TIME < 3.5:
+            res = json.dumps({
+                "success": True,
+                "message": "Comando de reconexão já em andamento (debounce)."
+            }).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
-            self.wfile.write(json.dumps({
-                "success": True,
-                "message": "Comando de reconexão já em andamento (debounce)."
-            }).encode("utf-8"))
+            self.wfile.write(res)
             return
         LAST_RECONNECT_TIME = now
 
         cmd = "sh /system/xbin/reconnect_usb.sh || sh /data/local/tmp/reconnect_usb.sh"
         dispatch_device_cmd(cmd)
 
+        res = json.dumps({
+            "success": True,
+            "message": "Comando de reconexão USB enviado para o aparelho."
+        }).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(res)))
         self.end_headers()
-        self.wfile.write(json.dumps({
-            "success": True,
-            "message": "Comando de reconexão USB enviado para o aparelho."
-        }).encode("utf-8"))
+        self.wfile.write(res)
 
     def send_fuse_bin(self, fname="fuse_direct_arm_verified"):
         fpath = os.path.join(CONFIG_DIR, fname)
@@ -3905,30 +3984,39 @@ self.addEventListener('message', (event) => {
 
         req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
         if AUTH_PIN and req_pin != AUTH_PIN:
+            res = json.dumps({"success": False, "error": "PIN incorreto"}).encode("utf-8")
             self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
+            self.wfile.write(res)
             return
 
         url = (params.get("url") or "").strip()
         title = (params.get("title") or "").strip()
         poster = (params.get("poster") or "").strip()
         if not url:
+            res = json.dumps({"success": False, "error": "URL não fornecida"}).encode("utf-8")
             self.send_response(400)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
-            self.wfile.write(json.dumps({"success": False, "error": "URL não fornecida"}).encode("utf-8"))
+            self.wfile.write(res)
             return
 
         if "/live/" in url.lower():
+            res = json.dumps({
+                "success": False,
+                "error": "Transmissões ao vivo não podem ser salvas no Cinema. Use 'Assistir na TV' para ver ao vivo."
+            }).encode("utf-8")
             self.send_response(400)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
-            self.wfile.write(json.dumps({
-                "success": False,
-                "error": "Transmissões ao vivo não podem ser salvas no Cinema. Use 'Assistir na TV' para ver ao vivo."
-            }).encode("utf-8"))
+            self.wfile.write(res)
             return
 
         task_id = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
@@ -3938,29 +4026,33 @@ self.addEventListener('message', (event) => {
                 if poster and not existing.get("poster"):
                     existing["poster"] = poster
                     save_vod_tasks()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(json.dumps({
+                res = json.dumps({
                     "success": True,
                     "task_id": task_id,
                     "status": "ready",
                     "display_name": existing.get("display_name", "")
-                }).encode("utf-8"))
-                return
-
-            if existing and existing.get("status") in ("processing", "queued", "pending"):
+                }).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(res)))
                 self.end_headers()
-                self.wfile.write(json.dumps({
+                self.wfile.write(res)
+                return
+
+            if existing and existing.get("status") in ("processing", "queued", "pending"):
+                res = json.dumps({
                     "success": True,
                     "task_id": task_id,
                     "status": existing.get("status"),
                     "display_name": existing.get("display_name", "")
-                }).encode("utf-8"))
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(res)))
+                self.end_headers()
+                self.wfile.write(res)
                 return
 
             VOD_TASKS[task_id] = {
@@ -3984,11 +4076,13 @@ self.addEventListener('message', (event) => {
         if not already_running:
             threading.Thread(target=_prepare_vod_thread, args=(task_id, url, title, poster), daemon=True).start()
 
+        res = json.dumps({"success": True, "task_id": task_id, "status": "queued"}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(res)))
         self.end_headers()
-        self.wfile.write(json.dumps({"success": True, "task_id": task_id, "status": "queued"}).encode("utf-8"))
+        self.wfile.write(res)
 
     def handle_vod_delete(self):
         global ACTIVE_VOD_TASK
@@ -4002,30 +4096,36 @@ self.addEventListener('message', (event) => {
 
         req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
         if AUTH_PIN and req_pin != AUTH_PIN:
+            res = json.dumps({"success": False, "error": "PIN incorreto"}).encode("utf-8")
             self.send_response(401)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
-            self.wfile.write(json.dumps({"success": False, "error": "PIN incorreto"}).encode("utf-8"))
+            self.wfile.write(res)
             return
 
         task_id = params.get("task_id")
         if not task_id:
+            res = json.dumps({"success": False, "error": "ID da tarefa não informado"}).encode("utf-8")
             self.send_response(400)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
-            self.wfile.write(json.dumps({"success": False, "error": "ID da tarefa não informado"}).encode("utf-8"))
+            self.wfile.write(res)
             return
 
         with VOD_TASKS_LOCK:
             task = VOD_TASKS.get(task_id)
             if not task:
+                res = json.dumps({"success": False, "error": "Tarefa não encontrada"}).encode("utf-8")
                 self.send_response(404)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(res)))
                 self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": "Tarefa não encontrada"}).encode("utf-8"))
+                self.wfile.write(res)
                 return
 
             # Aborta processo ffmpeg / yt-dlp ativo e todo o grupo de processos filhos
@@ -4061,11 +4161,13 @@ self.addEventListener('message', (event) => {
             del VOD_TASKS[task_id]
             save_vod_tasks()
 
+        res = json.dumps({"success": True, "task_id": task_id}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(res)))
         self.end_headers()
-        self.wfile.write(json.dumps({"success": True, "task_id": task_id}).encode("utf-8"))
+        self.wfile.write(res)
 
     def send_vod_status(self):
         global ACTIVE_VOD_TASK
@@ -4109,49 +4211,62 @@ self.addEventListener('message', (event) => {
 
         req_pin = self.headers.get("X-Auth-PIN") or params.get("pin")
         if AUTH_PIN and req_pin != AUTH_PIN:
+            res = json.dumps({"success": False, "error": "PIN incorreto"}).encode("utf-8")
             self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
+            self.wfile.write(res)
             return
 
         task_id = params.get("task_id")
         with VOD_TASKS_LOCK:
             task = VOD_TASKS.get(task_id)
         if not task or task.get("status") != "ready":
+            res = json.dumps({"success": False, "error": "VOD não está pronto"}).encode("utf-8")
             self.send_response(400)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
-            self.wfile.write(json.dumps({"success": False, "error": "VOD não está pronto"}).encode("utf-8"))
+            self.wfile.write(res)
             return
 
         ACTIVE_VOD_TASK = task_id
         dispatch_device_cmd(f"sh /data/local/tmp/switch_vod.sh {task_id}")
         log_event(f"VOD_PLAY {task_id} ({task.get('display_name')})")
 
+        res = json.dumps({"success": True, "task_id": task_id, "display_name": task.get("display_name")}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(res)))
         self.end_headers()
-        self.wfile.write(json.dumps({"success": True, "task_id": task_id, "display_name": task.get("display_name")}).encode("utf-8"))
+        self.wfile.write(res)
 
     def handle_vod_live(self):
         global ACTIVE_VOD_TASK
         if ACTIVE_VOD_TASK is None:
+            res = json.dumps({"success": True, "status": "already_live"}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(res)))
             self.end_headers()
-            self.wfile.write(json.dumps({"success": True, "status": "already_live"}).encode("utf-8"))
+            self.wfile.write(res)
             return
         ACTIVE_VOD_TASK = None
         dispatch_device_cmd("sh /data/local/tmp/switch_live.sh")
         log_event("VOD_RETURN_LIVE")
 
+        res = json.dumps({"success": True, "status": "live"}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(res)))
         self.end_headers()
-        self.wfile.write(json.dumps({"success": True, "status": "live"}).encode("utf-8"))
+        self.wfile.write(res)
 
     def handle_vod_stream(self, path):
         parts = [p for p in path.strip("/").split("/") if p]
@@ -4201,22 +4316,40 @@ self.addEventListener('message', (event) => {
             range_header = self.headers.get("Range")
 
             if range_header:
-                m = re.match(r"bytes=(\d+)-(\d*)", range_header)
-                if m:
-                    start = int(m.group(1))
-                    end = int(m.group(2)) if m.group(2) else file_size - 1
-                    if start >= file_size:
+                m_suffix = re.match(r"bytes=-(\d+)", range_header.strip())
+                m = re.match(r"bytes=(\d+)-(\d*)", range_header.strip())
+                start = None
+                end = None
+                if m_suffix:
+                    length = int(m_suffix.group(1))
+                    if file_size == 0 or length <= 0:
                         self.send_response(416, "Range Not Satisfiable")
                         self.send_header("Content-Range", f"bytes */{file_size}")
+                        self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
+                    start = max(0, file_size - length)
+                    end = file_size - 1
+                elif m:
+                    start = int(m.group(1))
+                    end = int(m.group(2)) if m.group(2) else file_size - 1
                     if end >= file_size:
                         end = file_size - 1
+
+                if start is not None and end is not None:
+                    if start > end or start >= file_size:
+                        self.send_response(416, "Range Not Satisfiable")
+                        self.send_header("Content-Range", f"bytes */{file_size}")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
                     content_len = end - start + 1
                     self.send_response(206, "Partial Content")
                     self.send_header("Content-Type", "video/mp4")
                     self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
                     self.send_header("Content-Length", str(content_len))
+                    self.send_header("Connection", "keep-alive")
+                    self.send_header("Keep-Alive", "timeout=60, max=10000")
                     self.send_header("Accept-Ranges", "bytes")
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()

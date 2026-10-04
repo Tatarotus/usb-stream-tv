@@ -150,3 +150,24 @@ Quando o usuário troca de canal através do controle remoto PWA:
 1. **Make-Before-Break**: O canal anterior continua transmitindo até que o novo canal estabeleça conexão de rede, decodifique o primeiro frame e entregue os primeiros pacotes TS.
 2. **SeamlessRestamper**: O módulo analisa e reescreve os valores de **PCR**, **PTS** e **DTS** do novo canal em tempo real, garantindo que o contador de tempo avance de forma estritamente monotônica sem nunca saltar para trás ou reiniciar em zero.
 3. A TV não percebe a troca física do fluxo; a imagem muda suavemente como em uma transmissão de TV aberta tradicional.
+
+---
+
+## 6. Arquitetura VOD Cinema V2 (`src/client/fuse_direct_v2.c`)
+
+Para suportar conteúdos sob demanda (filmes MP4, gravações e vídeos do YouTube) mantendo a TV Samsung ConnectShare 2013 imune a *buffer underrun* e travamentos SCSI, o cliente de emulação introduz a arquitetura **VOD V2 Dual-Cache com Prefetch Assíncrono**:
+
+### 6.1. FUSE Head Pinning Cache (8 MB)
+- **Zero Latency para Metadados e Átomos**: Os primeiros 8 MB (`0..8388608` bytes) do arquivo de vídeo sob demanda são mantidos permanentemente fixados em RAM (`vod_head_cache`).
+- **Imunidade a Seeks para o Início**: Sempre que o firmware da TV realiza leitura do átomo `moov`/`ftyp` ou retrocesso para o início do arquivo, a resposta é entregue instantaneamente (0 ms) a partir da memória, sem disparar requisições HTTP redundantes para o servidor ou VPS.
+
+### 6.2. Dedicated Media Sliding Cache (16 MB) e Double Buffering
+- **Prefetch Assíncrono com Background Worker**: Uma thread dedicada em background (`vod_prefetch_worker`) antecipa a leitura da mídia em blocos de 4 MB (`VOD_CHUNK_SZ`), preenchendo o buffer secundário enquanto a TV lê do buffer primário (`vod_media_cache` e `vod_prefetch_buf`).
+- **Troca de Ponteiros O(1)**: Quando o offset da TV alcança o chunk pré-carregado, ocorre uma alternância atômica de buffers sem cópia de memória (*double buffering*).
+- **Conexão TCP Persistente (`TCP_NODELAY`)**: Conexão keep-alive dedicada com socket persistente e parser HTTP bulk em lote, eliminando o overhead de handshake e loops de leitura de 1 byte.
+- **Cancelamento Rápido em Seek**: Se o usuário realizar seek arbitrário além da janela pré-carregada, uma flag volátil `vod_prefetch_abort` sinaliza o encerramento do chunk corrente para sincronizar imediatamente com a nova posição.
+
+### 6.3. Scripts de Hot-Upgrade e Rollback Atômico
+- **`scripts/apply_vod_v2.sh`**: Atualização a quente sem indisponibilidade (*zero-downtime*) com validação estrita de integridade ELF (`\x7fELF` e tamanho mínimo >100 KB) e lock atômico baseado em diretório (`mode_switch.lock.dir`).
+- **`scripts/rollback_vod.sh`**: Procedimento determinístico de rollback de 1 comando com restauração do binário original, flags e remount limpo.
+- Para especificações completas de engenharia e pipelines de transcodificação de VOD, consulte [docs/VOD_ARCHITECTURE.md](file:///home/sam/Code/usb-stream-tv-prod/docs/VOD_ARCHITECTURE.md).

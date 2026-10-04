@@ -10,6 +10,8 @@
 *.lock
 *.flag
 favorites.json
+series_favorites.json
+*.bak
 
 # Python Cache e Ambientes Virtuais
 __pycache__/

@@ -187,6 +187,7 @@ except Exception:
     gen_template = None
 
 FAVORITES_FILE = os.path.join(CONFIG_DIR, "favorites.json")
+SERIES_FAVORITES_FILE = os.path.join(CONFIG_DIR, "series_favorites.json")
 
 class FavoritesManager:
     def __init__(self, filepath):
@@ -197,15 +198,22 @@ class FavoritesManager:
 
     def load(self):
         with self.lock:
-            if os.path.exists(self.filepath):
-                try:
-                    with open(self.filepath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        if isinstance(data, list):
-                            self.favorites = set(str(x) for x in data)
-                except Exception as e:
-                    print(f"[FAV] Erro ao carregar {self.filepath}: {e}")
-            else:
+            loaded = False
+            for p in [self.filepath, self.filepath + ".bak"]:
+                if os.path.exists(p):
+                    try:
+                        with open(p, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            if isinstance(data, list):
+                                parsed = set(str(x) for x in data)
+                                if len(parsed) > 0 or not loaded:
+                                    self.favorites = parsed
+                                    loaded = True
+                                    if len(self.favorites) > 0:
+                                        break
+                    except Exception as e:
+                        print(f"[FAV] Erro ao carregar {p}: {e}")
+            if not loaded:
                 self.save()
 
     def save(self):
@@ -215,6 +223,10 @@ class FavoritesManager:
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(sorted(list(self.favorites)), f, indent=2)
                 os.replace(tmp, self.filepath)
+                # Cria cópia de segurança permanente (.bak)
+                bak = self.filepath + ".bak"
+                with open(bak, "w", encoding="utf-8") as f:
+                    json.dump(sorted(list(self.favorites)), f, indent=2)
             except Exception as e:
                 print(f"[FAV] Erro ao salvar {self.filepath}: {e}")
 
@@ -240,7 +252,22 @@ class FavoritesManager:
             self.save()
             return added, sorted(list(self.favorites))
 
+    def sync(self, items_list):
+        """União bidirecional com persistência automática (nunca perde dados do cliente)."""
+        with self.lock:
+            added_any = False
+            if isinstance(items_list, list):
+                for item in items_list:
+                    s_id = str(item).strip()
+                    if s_id and s_id not in self.favorites:
+                        self.favorites.add(s_id)
+                        added_any = True
+            if added_any or not os.path.exists(self.filepath):
+                self.save()
+            return sorted(list(self.favorites))
+
 FAV_MGR = FavoritesManager(FAVORITES_FILE)
+SERIES_FAV_MGR = FavoritesManager(SERIES_FAVORITES_FILE)
 
 
 def log_event(msg):
@@ -625,7 +652,9 @@ class CatalogManager:
 
             if cat_str and cat_str != "all":
                 if cat_str == "favorites":
-                    if not (FAV_MGR.is_fav(s_id_str) or (it.get("id") and FAV_MGR.is_fav(str(it.get("id"))))):
+                    mgr = SERIES_FAV_MGR if ctype == "series" else FAV_MGR
+                    target_id = it.get("series_id") or it.get("stream_id") or it.get("id")
+                    if not (mgr.is_fav(s_id_str) or (target_id and mgr.is_fav(str(target_id)))):
                         continue
                 elif cat_str == "eco":
                     ch_url = f"{XTREAM_UPSTREAM}/live/{XTREAM_USER}/{XTREAM_PASS}/{stream_id}.ts"
@@ -2659,7 +2688,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/groups":
             self.send_groups_json()
         elif path == "/api/favorites":
-            self.send_favorites_json()
+            self.send_favorites_json(FAV_MGR)
+        elif path == "/api/favorites/series":
+            self.send_favorites_json(SERIES_FAV_MGR)
         elif path == "/api/catalog/categories":
             self.send_catalog_categories(query.get("type", ["live"])[0])
         elif path == "/api/catalog/items":
@@ -3142,7 +3173,13 @@ self.addEventListener('message', (event) => {
         elif path == "/api/catalog/refresh":
             self.handle_catalog_refresh()
         elif path == "/api/favorites/toggle":
-            self.handle_favorite_toggle()
+            self.handle_favorite_toggle(FAV_MGR)
+        elif path == "/api/favorites/sync":
+            self.handle_favorite_sync(FAV_MGR)
+        elif path == "/api/favorites/series/toggle":
+            self.handle_favorite_toggle(SERIES_FAV_MGR)
+        elif path == "/api/favorites/series/sync":
+            self.handle_favorite_sync(SERIES_FAV_MGR)
         elif path == "/api/telemetry":
             self.handle_telemetry()
         elif path == "/api/telemetry_result":
@@ -3334,8 +3371,10 @@ self.addEventListener('message', (event) => {
         self.end_headers()
         self.wfile.write(res)
 
-    def send_favorites_json(self):
-        favs = FAV_MGR.get_all()
+    def send_favorites_json(self, mgr=None):
+        if mgr is None:
+            mgr = FAV_MGR
+        favs = mgr.get_all()
         res = json.dumps({"favorites": favs}, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -3345,7 +3384,9 @@ self.addEventListener('message', (event) => {
         self.end_headers()
         self.wfile.write(res)
 
-    def handle_favorite_toggle(self):
+    def handle_favorite_toggle(self, mgr=None):
+        if mgr is None:
+            mgr = FAV_MGR
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length).decode("utf-8")
@@ -3362,8 +3403,28 @@ self.addEventListener('message', (event) => {
             self.wfile.write(json.dumps({"success": False, "error": "ID ausente"}).encode("utf-8"))
             return
 
-        added, favs = FAV_MGR.toggle(item_id)
+        added, favs = mgr.toggle(item_id)
         res = json.dumps({"success": True, "added": added, "id": item_id, "favorites": favs}, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(res)))
+        self.end_headers()
+        self.wfile.write(res)
+
+    def handle_favorite_sync(self, mgr=None):
+        if mgr is None:
+            mgr = FAV_MGR
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8")
+            params = json.loads(body) if body else {}
+        except Exception:
+            params = {}
+
+        fav_list = params.get("favorites") or []
+        favs = mgr.sync(fav_list)
+        res = json.dumps({"success": True, "favorites": favs}, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -4172,7 +4233,24 @@ self.addEventListener('message', (event) => {
     def send_vod_status(self):
         global ACTIVE_VOD_TASK
         with VOD_TASKS_LOCK:
-            tasks_list = list(VOD_TASKS.values())
+            tasks_list = []
+            for t in VOD_TASKS.values():
+                t_dict = dict(t)
+                tid = t.get("id")
+                dest = os.path.join(VOD_DIR, f"{tid}.ts")
+                if os.path.exists(dest):
+                    try:
+                        sz = os.path.getsize(dest)
+                        t_dict["file_size_bytes"] = sz
+                        if sz >= 1024**3:
+                            t_dict["file_size_str"] = f"{sz / (1024**3):.1f} GB"
+                        elif sz >= 1024**2:
+                            t_dict["file_size_str"] = f"{sz / (1024**2):.1f} MB"
+                        else:
+                            t_dict["file_size_str"] = f"{sz / 1024:.0f} KB"
+                    except Exception:
+                        pass
+                tasks_list.append(t_dict)
 
         # Coloca os VODs mais recentes no topo da pilha (ordem decrescente de criação/atualização)
         tasks_list.reverse()
@@ -5552,6 +5630,65 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             outline: 4px solid var(--gold);
         }
 
+        .series-fav-star {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+            width: 44px;
+            height: 44px;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            z-index: 5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 26px;
+            color: rgba(255, 255, 255, 0.35);
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .series-fav-star:hover {
+            transform: scale(1.12);
+            background: rgba(15, 23, 42, 0.95);
+            color: var(--gold);
+        }
+        .series-fav-star.is-fav {
+            color: var(--gold);
+            text-shadow: 0 0 10px rgba(250, 204, 21, 0.8);
+            border-color: var(--gold);
+            background: rgba(15, 23, 42, 0.92);
+        }
+
+        /* Modal de Detalhes do VOD Salvo */
+        .vod-details-modal-box {
+            height: auto !important;
+            max-height: 85vh;
+            border-color: #3b82f6 !important;
+        }
+        .vod-modal-details-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+            background: #0f172a;
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            padding: 12px 14px;
+        }
+        .vod-modal-detail-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 15px;
+            gap: 12px;
+        }
+        .vod-modal-label {
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
         .active-live-badge {
             display: none;
             position: absolute;
@@ -6813,7 +6950,10 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             <div class="modal-series-header">
                 <img id="modal-series-poster-img" class="modal-series-poster" src="" alt="">
                 <div class="modal-series-info">
-                    <div id="modal-series-title-text" class="modal-series-title">Título da Série</div>
+                    <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;">
+                        <div id="modal-series-title-text" class="modal-series-title">Título da Série</div>
+                        <button id="btn-modal-series-fav" class="channel-fav-btn" style="width: 44px; height: 44px; font-size: 26px; padding: 0;" onclick="toggleCurrentSeriesFavorite(event)" title="Favoritar Série" aria-label="Favoritar série">★</button>
+                    </div>
                     <div id="modal-series-meta-text" class="modal-series-meta">Ano • Nota</div>
                 </div>
             </div>
@@ -6832,6 +6972,49 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                 <div id="series-episodes-list" class="episodes-list">
                     <div style="text-align: center; padding: 20px; color: var(--text-muted);">Carregando episódios...</div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE DETALHES DE VOD / VÍDEO SALVO NA TV -->
+    <div id="vod-details-modal" class="senior-modal" style="display: none;" onclick="closeVodDetailsModal()">
+        <div class="series-modal-box vod-details-modal-box" onclick="event.stopPropagation()">
+            <button class="modal-close-icon-btn" onclick="closeVodDetailsModal()" aria-label="Fechar">✕</button>
+            
+            <div class="modal-series-header">
+                <img id="vod-modal-poster-img" class="modal-series-poster" src="" alt="" onerror="this.outerHTML='<div class=\\'modal-series-poster\\'>🎬</div>'">
+                <div class="modal-series-info">
+                    <div id="vod-modal-badge" class="badge-route badge-direct" style="display:inline-flex; width:fit-content; margin-bottom:6px; font-size:12px;">🎬 VÍDEO SALVO</div>
+                    <div id="vod-modal-title-text" class="modal-series-title" style="word-break: break-word; white-space: normal; font-size: 20px;">Título do Vídeo</div>
+                    <div id="vod-modal-meta-text" class="modal-series-meta">Tamanho • Data</div>
+                </div>
+            </div>
+
+            <div class="vod-modal-details-grid">
+                <div class="vod-modal-detail-item">
+                    <span class="vod-modal-label">📦 Tamanho no Disco:</span>
+                    <strong id="vod-modal-size-val">-- MB</strong>
+                </div>
+                <div class="vod-modal-detail-item">
+                    <span class="vod-modal-label">📅 Gravado em:</span>
+                    <strong id="vod-modal-date-val">--</strong>
+                </div>
+                <div class="vod-modal-detail-item">
+                    <span class="vod-modal-label">📺 Status na TV:</span>
+                    <strong id="vod-modal-status-val">Pronto no Disco</strong>
+                </div>
+            </div>
+            
+            <div class="modal-actions" style="margin-top: 14px; gap: 10px;">
+                <button id="btn-vod-modal-play" class="btn-modal-action btn-modal-tv" onclick="playSelectedVodModal()">
+                    ▶️ ASSISTIR NA TV
+                </button>
+                <button id="btn-vod-modal-web" class="btn-modal-action btn-modal-web" onclick="playSelectedVodWeb()">
+                    🌐 ASSISTIR NO CELULAR
+                </button>
+                <button id="btn-vod-modal-delete" class="btn-modal-action" style="background: rgba(239, 68, 68, 0.2); border: 2px solid #ef4444; color: #fca5a5;" onclick="deleteSelectedVodModal()">
+                    🗑️ Excluir da Memória da TV
+                </button>
             </div>
         </div>
     </div>
@@ -6896,9 +7079,38 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                 .replace(/'/g, '&#039;');
         }
 
-        // Estado Global
+        // Estado Global com Persistência em LocalStorage (0ms de latência e à prova de reinicialização)
         let currentAppMode = localStorage.getItem('tv_last_mode') || 'cinema'; // Cinema como prioridade do casal!
         let favoritesSet = new Set();
+        try {
+            const rawFavs = localStorage.getItem('tv_channel_favorites') || localStorage.getItem('tv_favorites');
+            if (rawFavs) {
+                const parsed = JSON.parse(rawFavs);
+                if (Array.isArray(parsed)) favoritesSet = new Set(parsed.map(String));
+            }
+        } catch (e) {}
+
+        let seriesFavoritesSet = new Set();
+        try {
+            const rawSeriesFavs = localStorage.getItem('tv_series_favorites');
+            if (rawSeriesFavs) {
+                const parsed = JSON.parse(rawSeriesFavs);
+                if (Array.isArray(parsed)) seriesFavoritesSet = new Set(parsed.map(String));
+            }
+        } catch (e) {}
+
+        function saveChannelFavorites() {
+            try {
+                localStorage.setItem('tv_channel_favorites', JSON.stringify(Array.from(favoritesSet)));
+            } catch (e) {}
+        }
+
+        function saveSeriesFavorites() {
+            try {
+                localStorage.setItem('tv_series_favorites', JSON.stringify(Array.from(seriesFavoritesSet)));
+            } catch (e) {}
+        }
+
         let currentActiveId = null;
         let currentActiveName = '';
         let actionBannerTimer = null;
@@ -7684,17 +7896,17 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                     : `<div class="vod-grid-poster-fallback">🎬</div>`;
 
                 html += `
-                    <div class="vod-grid-card ${isPlaying ? 'active' : ''}" role="region" aria-label="${title}">
+                    <div class="vod-grid-card ${isPlaying ? 'active' : ''}" role="region" aria-label="${title}" onclick="openVodDetailsModal('${safeId}')" style="cursor: pointer;">
                         <div class="vod-grid-poster-wrap">
                             ${posterImg}
                             ${badgeHtml}
                         </div>
                         <div class="vod-grid-body">
                             <div class="vod-grid-title" title="${title}">${title}</div>
-                            <button class="btn-vod-grid-play" onclick="playVodTask('${safeId}', '${title}')" aria-label="Assistir ${title} na TV">
+                            <button class="btn-vod-grid-play" onclick="event.stopPropagation(); playVodTask('${safeId}', '${title}')" aria-label="Assistir ${title} na TV">
                                 ▶️ ASSISTIR
                             </button>
-                            <button class="btn-vod-grid-delete" onclick="deleteVodTask('${safeId}', '${title}')" aria-label="Excluir ${title}">
+                            <button class="btn-vod-grid-delete" onclick="event.stopPropagation(); deleteVodTask('${safeId}', '${title}')" aria-label="Excluir ${title}">
                                 🗑️ Excluir
                             </button>
                         </div>
@@ -7703,6 +7915,110 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             });
 
             shelf.innerHTML = html;
+        }
+
+        // ==================== MODAL DE DETALHES DE VOD SALVO ====================
+        let selectedVodTaskForModal = null;
+
+        function openVodDetailsModal(taskId) {
+            triggerHaptic();
+            const task = vodTasks.find(t => String(t.id) === String(taskId));
+            if (!task) return;
+            selectedVodTaskForModal = task;
+
+            const modal = document.getElementById('vod-details-modal');
+            const titleEl = document.getElementById('vod-modal-title-text');
+            const badgeEl = document.getElementById('vod-modal-badge');
+            const posterEl = document.getElementById('vod-modal-poster-img');
+            const sizeEl = document.getElementById('vod-modal-size-val');
+            const dateEl = document.getElementById('vod-modal-date-val');
+            const statusEl = document.getElementById('vod-modal-status-val');
+
+            const fullTitle = task.title || task.display_name || 'Vídeo Salvo';
+            if (titleEl) titleEl.innerText = fullTitle;
+
+            const urlLower = (task.url || '').toLowerCase();
+            const isYt = urlLower.includes('youtube.com') || urlLower.includes('youtu.be') || fullTitle.toLowerCase().includes('youtube');
+            const isSeries = fullTitle.includes(' - ') || fullTitle.toLowerCase().includes('temporada') || fullTitle.toLowerCase().includes('episodio') || fullTitle.toLowerCase().includes('ep ');
+
+            if (badgeEl) {
+                if (task.id === activeVodTask) {
+                    badgeEl.className = 'badge-route badge-direct';
+                    badgeEl.style.background = '#22c55e';
+                    badgeEl.innerText = '● NO AR NA TV';
+                } else if (isYt) {
+                    badgeEl.className = 'badge-route badge-yt';
+                    badgeEl.style.background = '';
+                    badgeEl.innerText = '▶️ VÍDEO DO YOUTUBE';
+                } else if (isSeries) {
+                    badgeEl.className = 'badge-route';
+                    badgeEl.style.background = '#7c3aed';
+                    badgeEl.innerText = '🍿 EPISÓDIO DE SÉRIE';
+                } else {
+                    badgeEl.className = 'badge-route badge-direct';
+                    badgeEl.style.background = '';
+                    badgeEl.innerText = '🎬 FILME DE CINEMA';
+                }
+            }
+
+            if (posterEl) {
+                if (task.poster) {
+                    posterEl.src = task.poster;
+                    posterEl.style.display = 'block';
+                } else {
+                    posterEl.src = '';
+                    posterEl.style.display = 'none';
+                }
+            }
+
+            if (sizeEl) {
+                sizeEl.innerText = task.file_size_str || (task.size ? `${(task.size / (1024*1024)).toFixed(1)} MB` : 'Armazenado no Flash/USB');
+            }
+
+            if (dateEl) {
+                const ts = task.created_at || task.updated_at;
+                if (ts) {
+                    const d = new Date(ts * 1000);
+                    dateEl.innerText = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+                } else {
+                    dateEl.innerText = 'Recente';
+                }
+            }
+
+            if (statusEl) {
+                statusEl.innerText = (task.id === activeVodTask) ? 'Transmitindo para a TV' : 'Pronto para reprodução instantânea';
+            }
+
+            if (modal) modal.style.display = 'flex';
+        }
+
+        function closeVodDetailsModal() {
+            triggerHaptic();
+            const modal = document.getElementById('vod-details-modal');
+            if (modal) modal.style.display = 'none';
+            selectedVodTaskForModal = null;
+        }
+
+        function playSelectedVodModal() {
+            if (!selectedVodTaskForModal) return;
+            const task = selectedVodTaskForModal;
+            closeVodDetailsModal();
+            playVodTask(task.id, task.title || task.display_name);
+        }
+
+        function deleteSelectedVodModal() {
+            if (!selectedVodTaskForModal) return;
+            const task = selectedVodTaskForModal;
+            closeVodDetailsModal();
+            deleteVodTask(task.id, task.title || task.display_name);
+        }
+
+        function playSelectedVodWeb() {
+            if (!selectedVodTaskForModal) return;
+            const task = selectedVodTaskForModal;
+            const title = task.title || task.display_name || 'Vídeo';
+            closeVodDetailsModal();
+            openWebPlayerVod(task.id, title);
         }
 
         // Tocar Filme do Cinema VOD na TV
@@ -8215,7 +8531,11 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
         function renderSeriesCategories() {
             const bar = document.getElementById('series-categories');
             if (!bar) return;
+            const isFav = (seriesCategory === 'favorites');
             let html = `
+                <button class="cat-chip ${isFav ? 'active' : ''}" onclick="selectSeriesCategory('favorites')">
+                    ⭐ Favoritas <span class="fav-badge">${seriesFavoritesSet.size}</span>
+                </button>
                 <button class="cat-chip ${seriesCategory === 'all' ? 'active' : ''}" onclick="selectSeriesCategory('all')">
                     ✨ Todas as Séries
                 </button>
@@ -8302,11 +8622,20 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             if (!grid) return;
 
             if (!catalogSeries || catalogSeries.length === 0) {
-                grid.innerHTML = `
-                    <div style="text-align: center; padding: 30px; color: var(--text-muted); font-size: 18px; grid-column: 1 / -1;">
-                        Nenhuma série encontrada nesta categoria ou busca.
-                    </div>
-                `;
+                if (seriesCategory === 'favorites') {
+                    grid.innerHTML = `
+                        <div style="text-align: center; padding: 36px 14px; color: var(--text-muted); font-size: 18px; line-height: 1.5; grid-column: 1 / -1; background: var(--surface); border: 2px dashed var(--border); border-radius: var(--btn-radius);">
+                            ⭐ Nenhuma série favoritada ainda.<br>
+                            <span style="font-size: 15px; color: var(--gold); margin-top: 6px; display: inline-block;">Toque na estrela (★) de qualquer série do catálogo para adicioná-la aos seus favoritos!</span>
+                        </div>
+                    `;
+                } else {
+                    grid.innerHTML = `
+                        <div style="text-align: center; padding: 30px; color: var(--text-muted); font-size: 18px; grid-column: 1 / -1;">
+                            Nenhuma série encontrada nesta categoria ou busca.
+                        </div>
+                    `;
+                }
                 return;
             }
 
@@ -8314,20 +8643,69 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             catalogSeries.forEach((s, idx) => {
                 const title = escapeHtml(s.name || 'Série');
                 const year = escapeHtml(s.year || '');
+                const sIdStr = String(s.id);
+                const isFav = seriesFavoritesSet.has(sIdStr);
                 const posterUrl = getPosterUrl(s.poster);
                 const posterImg = posterUrl
                     ? `<img class="catalog-movie-poster" src="${escapeHtml(posterUrl)}" alt="" loading="lazy" onerror="this.onerror=null; this.outerHTML='<div class=\\'catalog-movie-poster\\'>🍿</div>';">`
                     : `<div class="catalog-movie-poster">🍿</div>`;
 
                 html += `
-                    <div class="catalog-movie-card" tabindex="0" role="button" aria-label="Ver série ${title}" onclick="openSeriesModal(${idx})">
+                    <div class="catalog-movie-card" style="position: relative;" tabindex="0" role="button" aria-label="Ver série ${title}" onclick="openSeriesModal(${idx})">
                         ${posterImg}
+                        <button class="channel-fav-btn series-fav-star ${isFav ? 'is-fav' : ''}" 
+                                title="Favoritar Série" 
+                                aria-label="${isFav ? 'Remover série dos favoritos' : 'Adicionar série aos favoritos'}"
+                                onclick="toggleSeriesFavorite(event, '${escapeHtml(sIdStr)}')">
+                            ★
+                        </button>
                         <div class="catalog-movie-title">${title}</div>
                         <div class="catalog-movie-year">${year}</div>
                     </div>
                 `;
             });
             grid.innerHTML = html;
+        }
+
+        async function toggleSeriesFavorite(e, id) {
+            if (e) e.stopPropagation();
+            triggerHaptic();
+            const idStr = String(id);
+
+            if (seriesFavoritesSet.has(idStr)) {
+                seriesFavoritesSet.delete(idStr);
+            } else {
+                seriesFavoritesSet.add(idStr);
+            }
+            saveSeriesFavorites();
+            renderSeriesCategories();
+            renderCatalogSeries();
+
+            // Atualiza estrela no modal se aberto para esta série
+            if (selectedSeries && String(selectedSeries.id) === idStr) {
+                const favBtn = document.getElementById('btn-modal-series-fav');
+                if (favBtn) {
+                    favBtn.classList.toggle('is-fav', seriesFavoritesSet.has(idStr));
+                }
+            }
+
+            try {
+                await fetch('/api/favorites/series/toggle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: idStr })
+                });
+            } catch (err) {}
+
+            if (seriesCategory === 'favorites') {
+                loadSeriesCatalog(true);
+            }
+        }
+
+        function toggleCurrentSeriesFavorite(e) {
+            if (e) e.stopPropagation();
+            if (!selectedSeries) return;
+            toggleSeriesFavorite(e, selectedSeries.id);
         }
 
         function toggleSeriesPlot(el) {
@@ -8339,6 +8717,12 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             triggerHaptic();
             selectedSeries = catalogSeries[idx];
             if (!selectedSeries) return;
+
+            const isFav = seriesFavoritesSet.has(String(selectedSeries.id));
+            const favBtn = document.getElementById('btn-modal-series-fav');
+            if (favBtn) {
+                favBtn.classList.toggle('is-fav', isFav);
+            }
 
             document.getElementById('modal-series-title-text').innerText = selectedSeries.name || 'Série';
             document.getElementById('modal-series-meta-text').innerText = `${selectedSeries.year || ''} ${selectedSeries.rating ? '★ ' + selectedSeries.rating : ''}`;
@@ -8748,6 +9132,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             } else {
                 favoritesSet.add(idStr);
             }
+            saveChannelFavorites();
             renderChannels();
             renderLiveCategories();
 
@@ -9191,13 +9576,41 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             setupKeyboardListeners();
             setupScrollListeners();
 
-            // Sincroniza favoritos antes de renderizar
+            // Sincroniza favoritos de canais e séries antes de renderizar (com restauração automática se servidor reiniciar)
             try {
                 const favRes = await fetch('/api/favorites', { signal: AbortSignal.timeout(3000) });
                 if (favRes.ok) {
                     const favData = await favRes.json();
-                    if (Array.isArray(favData.favorites)) {
-                        favoritesSet = new Set(favData.favorites.map(String));
+                    const sFavs = Array.isArray(favData.favorites) ? favData.favorites.map(String) : [];
+                    if (sFavs.length === 0 && favoritesSet.size > 0) {
+                        // Servidor reiniciado/vazio: restaura favoritos locais do cliente no servidor!
+                        fetch('/api/favorites/sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ favorites: Array.from(favoritesSet) })
+                        }).catch(() => {});
+                    } else if (sFavs.length > 0) {
+                        sFavs.forEach(id => favoritesSet.add(id));
+                        saveChannelFavorites();
+                    }
+                }
+            } catch (e) {}
+
+            try {
+                const sFavRes = await fetch('/api/favorites/series', { signal: AbortSignal.timeout(3000) });
+                if (sFavRes.ok) {
+                    const sFavData = await sFavRes.json();
+                    const sFavs = Array.isArray(sFavData.favorites) ? sFavData.favorites.map(String) : [];
+                    if (sFavs.length === 0 && seriesFavoritesSet.size > 0) {
+                        // Servidor reiniciado/vazio: restaura favoritos locais de séries do cliente no servidor!
+                        fetch('/api/favorites/series/sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ favorites: Array.from(seriesFavoritesSet) })
+                        }).catch(() => {});
+                    } else if (sFavs.length > 0) {
+                        sFavs.forEach(id => seriesFavoritesSet.add(id));
+                        saveSeriesFavorites();
                     }
                 }
             } catch (e) {}
@@ -9211,7 +9624,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v8') caches.delete(k);
+                        if (k !== 'controle-tv-v10') caches.delete(k);
                     });
                 }).catch(() => {});
             }

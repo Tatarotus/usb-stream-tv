@@ -2164,7 +2164,6 @@ def probe_vod_stream(url, use_proxy=False):
     """Obtém metadados de vídeo, áudio e duração remota via ffprobe."""
     probe_cmd = [
         "ffprobe", "-v", "error",
-        "-headers", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n",
         "-show_entries", "format=duration:stream=codec_type,codec_name,profile,level,pix_fmt,width,height,channels,sample_rate,sample_aspect_ratio,r_frame_rate",
         "-of", "json"
     ]
@@ -2368,8 +2367,8 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     w = int(st.get("width", 0) or 0)
                     h = int(st.get("height", 0) or 0)
                     sar = (st.get("sample_aspect_ratio") or "").strip()
-                    is_square_sar = sar in ("1:1", "1/1")
-                    if codec in ("h264", "avc1") and pix in ("yuv420p", "yuvj420p", "") and lvl <= 42 and w <= 1920 and h <= 1080 and is_square_sar:
+                    is_compatible_sar = sar in ("1:1", "1/1", "0:1", "", "160:159", "64:45", "40:33", "12:11", "10:11") or not sar
+                    if codec in ("h264", "avc1") and pix in ("yuv420p", "yuvj420p", "") and lvl <= 42 and w <= 1920 and h <= 1080 and is_compatible_sar:
                         can_copy_video = True
                 except Exception:
                     can_copy_video = False
@@ -2476,8 +2475,8 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     w = int(v_stream.get("width", 0) or 0)
                     h = int(v_stream.get("height", 0) or 0)
                     sar = (v_stream.get("sample_aspect_ratio") or "").strip()
-                    is_square_sar = sar in ("1:1", "1/1")
-                    if codec in ("h264", "avc1") and pix in ("yuv420p", "yuvj420p", "") and lvl <= 42 and w <= 1920 and h <= 1080 and is_square_sar:
+                    is_compatible_sar = sar in ("1:1", "1/1", "0:1", "", "160:159", "64:45", "40:33", "12:11", "10:11") or not sar
+                    if codec in ("h264", "avc1") and pix in ("yuv420p", "yuvj420p", "") and lvl <= 42 and w <= 1920 and h <= 1080 and is_compatible_sar:
                         can_copy_video = True
 
                 cmd = ["ffmpeg", "-y"]
@@ -2490,7 +2489,6 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     "-reconnect_delay_max", "5",
                     "-recv_buffer_size", "1048576",
                     "-tcp_nodelay", "1",
-                    "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "-i", resolved_url
                 ])
 
@@ -2503,15 +2501,19 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     print(f"[VOD] Stream copy direto 1080p sem perda ({route_desc}) '{clean_title}'...")
                 else:
                     with VOD_TASKS_LOCK:
-                        task["status_msg"] = "Transcodificando para 1080p H.264 High Profile (7000k)..."
+                        task["status_msg"] = "Transcodificando para H.264 Samsung TV..."
                         task["progress"] = 10
+                    if w > 1920 or h > 1080:
+                        scale_vf = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+                    else:
+                        scale_vf = "scale='min(1920,iw)':-2"
                     cmd.extend([
-                        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+                        "-vf", scale_vf,
                         "-r", "30",
                         "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.1",
-                        "-b:v", "7000k", "-maxrate", "8000k", "-bufsize", "5000k", "-g", "30"
+                        "-crf", "22", "-maxrate", "5000k", "-bufsize", "6000k", "-g", "30"
                     ])
-                    print(f"[VOD] Transcodificando para 1080p H.264 '{clean_title}'...")
+                    print(f"[VOD] Transcodificando para Samsung TV H.264 '{clean_title}'...")
 
                 cmd.extend([
                     "-c:a", "ac3", "-b:a", "384k", "-ar", "48000", "-ac", "2",

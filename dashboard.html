@@ -969,6 +969,7 @@
         }
 
         .catalog-movie-card {
+            position: relative;
             background: var(--surface);
             border: 3px solid var(--border);
             border-radius: var(--btn-radius);
@@ -986,6 +987,37 @@
         .catalog-movie-card:focus-visible {
             outline: 4px solid var(--gold);
             outline-offset: 4px;
+        }
+
+        .catalog-rating-badge {
+            position: absolute;
+            top: 18px;
+            left: 18px;
+            background: rgba(11, 15, 25, 0.90);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1.5px solid rgba(255, 255, 255, 0.24);
+            color: #ffffff;
+            padding: 4px 8px;
+            border-radius: 6px;
+            letter-spacing: 0.2px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.65);
+            z-index: 4;
+            pointer-events: none;
+            display: inline-flex;
+            align-items: baseline;
+            gap: 1px;
+            line-height: 1;
+        }
+        .catalog-rating-badge .rating-num {
+            font-size: 13px;
+            font-weight: 900;
+            color: #ffffff;
+        }
+        .catalog-rating-badge .rating-denom {
+            font-size: 10px;
+            font-weight: 700;
+            color: #94a3b8;
         }
 
         .catalog-movie-poster {
@@ -4060,6 +4092,23 @@
             }
         }
 
+        function formatRating(val) {
+            if (val === null || val === undefined) return '';
+            const s = String(val).trim();
+            if (!s) return '';
+            const num = parseFloat(s);
+            if (isNaN(num) || num <= 0) return '';
+            const cleanNum = (num % 1 === 0) ? num.toFixed(0) : num.toFixed(1);
+            return `${cleanNum}/10`;
+        }
+
+        function getRatingBadgeHtml(val) {
+            const r = formatRating(val);
+            if (!r) return '';
+            const [num, denom] = r.split('/');
+            return `<div class="catalog-rating-badge"><span class="rating-num">${escapeHtml(num)}</span><span class="rating-denom">/${escapeHtml(denom)}</span></div>`;
+        }
+
         function getPosterUrl(url) {
             if (!url) return '';
             url = String(url).trim();
@@ -4086,6 +4135,7 @@
             catalogMovies.forEach((m, idx) => {
                 const title = escapeHtml(m.name || 'Filme');
                 const year = escapeHtml(m.year || '');
+                const ratingBadge = getRatingBadgeHtml(m.rating);
                 const posterUrl = getPosterUrl(m.poster);
                 const posterImg = posterUrl
                     ? `<img class="catalog-movie-poster" src="${escapeHtml(posterUrl)}" alt="" loading="lazy" onerror="this.onerror=null; this.outerHTML='<div class=\\'catalog-movie-poster\\'>🎬</div>';">`
@@ -4094,6 +4144,7 @@
                 html += `
                     <div class="catalog-movie-card" tabindex="0" role="button" aria-label="Ver filme ${title}" onclick="openMovieModal(${idx})">
                         ${posterImg}
+                        ${ratingBadge}
                         <div class="catalog-movie-title">${title}</div>
                         <div class="catalog-movie-year">${year}</div>
                     </div>
@@ -4109,7 +4160,9 @@
             if (!selectedMovie) return;
 
             document.getElementById('modal-title-text').innerText = selectedMovie.name || 'Filme';
-            document.getElementById('modal-meta-text').innerText = `${selectedMovie.year || ''} ${selectedMovie.rating ? '★ ' + selectedMovie.rating : ''}`;
+            const movieRatingStr = formatRating(selectedMovie.rating);
+            const movieMetaParts = [selectedMovie.year, movieRatingStr].filter(Boolean);
+            document.getElementById('modal-meta-text').innerText = movieMetaParts.join(' • ');
             document.getElementById('modal-plot-text').innerText = selectedMovie.plot || 'Filme completo em alta definição disponível para reprodução na TV da sala.';
             
             const pImg = document.getElementById('modal-poster-img');
@@ -4308,6 +4361,7 @@
             catalogSeries.forEach((s, idx) => {
                 const title = escapeHtml(s.name || 'Série');
                 const year = escapeHtml(s.year || '');
+                const ratingBadge = getRatingBadgeHtml(s.rating);
                 const sIdStr = String(s.id);
                 const isFav = seriesFavoritesSet.has(sIdStr);
                 const posterUrl = getPosterUrl(s.poster);
@@ -4316,8 +4370,9 @@
                     : `<div class="catalog-movie-poster">🍿</div>`;
 
                 html += `
-                    <div class="catalog-movie-card" style="position: relative;" tabindex="0" role="button" aria-label="Ver série ${title}" onclick="openSeriesModal(${idx})">
+                    <div class="catalog-movie-card" tabindex="0" role="button" aria-label="Ver série ${title}" onclick="openSeriesModal(${idx})">
                         ${posterImg}
+                        ${ratingBadge}
                         <button class="channel-fav-btn series-fav-star ${isFav ? 'is-fav' : ''}" 
                                 title="Favoritar Série" 
                                 aria-label="${isFav ? 'Remover série dos favoritos' : 'Adicionar série aos favoritos'}"
@@ -4388,7 +4443,9 @@
             }
 
             document.getElementById('modal-series-title-text').innerText = selectedSeries.name || 'Série';
-            document.getElementById('modal-series-meta-text').innerText = `${selectedSeries.year || ''} ${selectedSeries.rating ? '★ ' + selectedSeries.rating : ''}`;
+            const seriesRatingStr = formatRating(selectedSeries.rating);
+            const seriesMetaParts = [selectedSeries.year, seriesRatingStr].filter(Boolean);
+            document.getElementById('modal-series-meta-text').innerText = seriesMetaParts.join(' • ');
             const plotEl = document.getElementById('modal-series-plot-text');
             if (plotEl) {
                 plotEl.innerText = selectedSeries.plot || 'Carregando sinopse e episódios...';
@@ -4409,6 +4466,10 @@
                 const res = await fetch(`/api/catalog/series_info?id=${selectedSeries.id}&_t=${Date.now()}`, { cache: 'no-cache' });
                 const data = await res.json();
                 currentSeriesDetails = data;
+
+                const finalRating = formatRating(data.rating || selectedSeries.rating);
+                const finalMeta = [selectedSeries.year, finalRating, data.genre].filter(Boolean);
+                document.getElementById('modal-series-meta-text').innerText = finalMeta.join(' • ');
 
                 if (data.cover && pImg) {
                     pImg.src = getPosterUrl(data.cover);
@@ -5285,7 +5346,7 @@
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v11') caches.delete(k);
+                        if (k !== 'controle-tv-v12') caches.delete(k);
                     });
                 }).catch(() => {});
             }

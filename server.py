@@ -712,11 +712,15 @@ class CatalogManager:
                         poster = self.series_cover_lookup[cn]
                 if poster and poster.startswith("http://"):
                     poster = f"/api/logo?url={urllib.parse.quote(poster, safe='')}"
+                year_val = str(it.get("year") or (it.get("release_date") or it.get("releaseDate") or "")[:4] or "").strip()
+                if year_val == "None":
+                    year_val = ""
                 filtered.append({
                     "id": series_id,
                     "name": name,
                     "poster": poster,
                     "rating": str(it.get("rating") or ""),
+                    "year": year_val,
                     "plot": it.get("plot") or "",
                     "cat_id": it.get("category_id")
                 })
@@ -2883,8 +2887,20 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def send_service_worker(self):
-        sw = """// Service Worker para PWA do Controle Remoto
-const CACHE_NAME = 'controle-tv-v9';
+        sw_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sw.js")
+        if not os.path.exists(sw_path):
+            sw_path = os.path.join(CONFIG_DIR, "sw.js")
+        sw = None
+        if os.path.exists(sw_path):
+            try:
+                with open(sw_path, "r", encoding="utf-8") as f:
+                    sw = f.read()
+            except Exception:
+                pass
+
+        if not sw:
+            sw = """// Service Worker para PWA do Controle Remoto
+const CACHE_NAME = 'controle-tv-v12';
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
@@ -5468,6 +5484,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
         }
 
         .catalog-movie-card {
+            position: relative;
             background: var(--surface);
             border: 3px solid var(--border);
             border-radius: var(--btn-radius);
@@ -5485,6 +5502,37 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
         .catalog-movie-card:focus-visible {
             outline: 4px solid var(--gold);
             outline-offset: 4px;
+        }
+
+        .catalog-rating-badge {
+            position: absolute;
+            top: 18px;
+            left: 18px;
+            background: rgba(11, 15, 25, 0.90);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1.5px solid rgba(255, 255, 255, 0.24);
+            color: #ffffff;
+            padding: 4px 8px;
+            border-radius: 6px;
+            letter-spacing: 0.2px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.65);
+            z-index: 4;
+            pointer-events: none;
+            display: inline-flex;
+            align-items: baseline;
+            gap: 1px;
+            line-height: 1;
+        }
+        .catalog-rating-badge .rating-num {
+            font-size: 13px;
+            font-weight: 900;
+            color: #ffffff;
+        }
+        .catalog-rating-badge .rating-denom {
+            font-size: 10px;
+            font-weight: 700;
+            color: #94a3b8;
         }
 
         .catalog-movie-poster {
@@ -5613,20 +5661,34 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
         .channel-fav-btn {
             width: 48px;
             height: 48px;
+            padding: 0;
+            margin: 0;
+            box-sizing: border-box;
             display: flex;
             align-items: center;
             justify-content: center;
             font-size: 28px;
+            line-height: 0;
             color: var(--text-muted);
             background: transparent;
             border: none;
             cursor: pointer;
             border-radius: 50%;
             flex-shrink: 0;
+            transition: transform 0.15s ease, color 0.15s ease;
+        }
+        .channel-fav-btn svg {
+            width: 26px;
+            height: 26px;
+            display: block;
+            pointer-events: none;
+            flex-shrink: 0;
         }
         .channel-fav-btn.is-fav {
             color: var(--gold);
-            text-shadow: 0 0 10px rgba(250, 204, 21, 0.6);
+        }
+        .channel-fav-btn.is-fav svg {
+            filter: drop-shadow(0 0 6px rgba(250, 204, 21, 0.7));
         }
         .channel-fav-btn:focus-visible {
             outline: 4px solid var(--gold);
@@ -5638,6 +5700,10 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             right: 14px;
             width: 44px;
             height: 44px;
+            padding: 0;
+            margin: 0;
+            box-sizing: border-box;
+            line-height: 0;
             background: rgba(15, 23, 42, 0.85);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
@@ -5647,10 +5713,17 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 26px;
-            color: rgba(255, 255, 255, 0.35);
+            color: rgba(255, 255, 255, 0.4);
             cursor: pointer;
-            transition: all 0.15s ease;
+            transition: transform 0.15s ease, border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+        }
+        .series-fav-star svg {
+            width: 22px;
+            height: 22px;
+            display: block;
+            pointer-events: none;
+            flex-shrink: 0;
+            transition: transform 0.15s ease;
         }
         .series-fav-star:hover {
             transform: scale(1.12);
@@ -5659,9 +5732,11 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
         }
         .series-fav-star.is-fav {
             color: var(--gold);
-            text-shadow: 0 0 10px rgba(250, 204, 21, 0.8);
             border-color: var(--gold);
             background: rgba(15, 23, 42, 0.92);
+        }
+        .series-fav-star.is-fav svg {
+            filter: drop-shadow(0 0 6px rgba(250, 204, 21, 0.8));
         }
 
         /* Modal de Detalhes do VOD Salvo */
@@ -7036,7 +7111,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                 <div class="modal-series-info">
                     <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;">
                         <div id="modal-series-title-text" class="modal-series-title">Título da Série</div>
-                        <button id="btn-modal-series-fav" class="channel-fav-btn" style="width: 44px; height: 44px; font-size: 26px; padding: 0;" onclick="toggleCurrentSeriesFavorite(event)" title="Favoritar Série" aria-label="Favoritar série">★</button>
+                        <button id="btn-modal-series-fav" class="channel-fav-btn" style="width: 44px; height: 44px; padding: 0;" onclick="toggleCurrentSeriesFavorite(event)" title="Favoritar Série" aria-label="Favoritar série"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true" style="display:block;pointer-events:none;"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg></button>
                     </div>
                     <div id="modal-series-meta-text" class="modal-series-meta">Ano • Nota</div>
                 </div>
@@ -7166,6 +7241,10 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#039;');
         }
+
+        // Ícones SVG Vetoriais de Alta Precisão (Geometria 100% simétrica sem distorções de fonte do Android)
+        const FAV_STAR_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true" style="display:block;pointer-events:none;"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>';
+        const FAV_STAR_SVG_LG = '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true" style="display:block;pointer-events:none;"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>';
 
         // Estado Global com Persistência em LocalStorage (0ms de latência e à prova de reinicialização)
         let currentAppMode = localStorage.getItem('tv_last_mode') || 'cinema'; // Cinema como prioridade do casal!
@@ -8528,6 +8607,23 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             }
         }
 
+        function formatRating(val) {
+            if (val === null || val === undefined) return '';
+            const s = String(val).trim();
+            if (!s) return '';
+            const num = parseFloat(s);
+            if (isNaN(num) || num <= 0) return '';
+            const cleanNum = (num % 1 === 0) ? num.toFixed(0) : num.toFixed(1);
+            return `${cleanNum}/10`;
+        }
+
+        function getRatingBadgeHtml(val) {
+            const r = formatRating(val);
+            if (!r) return '';
+            const [num, denom] = r.split('/');
+            return `<div class="catalog-rating-badge"><span class="rating-num">${escapeHtml(num)}</span><span class="rating-denom">/${escapeHtml(denom)}</span></div>`;
+        }
+
         function getPosterUrl(url) {
             if (!url) return '';
             url = String(url).trim();
@@ -8554,6 +8650,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             catalogMovies.forEach((m, idx) => {
                 const title = escapeHtml(m.name || 'Filme');
                 const year = escapeHtml(m.year || '');
+                const ratingBadge = getRatingBadgeHtml(m.rating);
                 const posterUrl = getPosterUrl(m.poster);
                 const posterImg = posterUrl
                     ? `<img class="catalog-movie-poster" src="${escapeHtml(posterUrl)}" alt="" loading="lazy" onerror="this.onerror=null; this.outerHTML='<div class=\\'catalog-movie-poster\\'>🎬</div>';">`
@@ -8562,6 +8659,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                 html += `
                     <div class="catalog-movie-card" tabindex="0" role="button" aria-label="Ver filme ${title}" onclick="openMovieModal(${idx})">
                         ${posterImg}
+                        ${ratingBadge}
                         <div class="catalog-movie-title">${title}</div>
                         <div class="catalog-movie-year">${year}</div>
                     </div>
@@ -8577,7 +8675,9 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             if (!selectedMovie) return;
 
             document.getElementById('modal-title-text').innerText = selectedMovie.name || 'Filme';
-            document.getElementById('modal-meta-text').innerText = `${selectedMovie.year || ''} ${selectedMovie.rating ? '★ ' + selectedMovie.rating : ''}`;
+            const movieRatingStr = formatRating(selectedMovie.rating);
+            const movieMetaParts = [selectedMovie.year, movieRatingStr].filter(Boolean);
+            document.getElementById('modal-meta-text').innerText = movieMetaParts.join(' • ');
             document.getElementById('modal-plot-text').innerText = selectedMovie.plot || 'Filme completo em alta definição disponível para reprodução na TV da sala.';
             
             const pImg = document.getElementById('modal-poster-img');
@@ -8776,6 +8876,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             catalogSeries.forEach((s, idx) => {
                 const title = escapeHtml(s.name || 'Série');
                 const year = escapeHtml(s.year || '');
+                const ratingBadge = getRatingBadgeHtml(s.rating);
                 const sIdStr = String(s.id);
                 const isFav = seriesFavoritesSet.has(sIdStr);
                 const posterUrl = getPosterUrl(s.poster);
@@ -8784,14 +8885,13 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                     : `<div class="catalog-movie-poster">🍿</div>`;
 
                 html += `
-                    <div class="catalog-movie-card" style="position: relative;" tabindex="0" role="button" aria-label="Ver série ${title}" onclick="openSeriesModal(${idx})">
+                    <div class="catalog-movie-card" tabindex="0" role="button" aria-label="Ver série ${title}" onclick="openSeriesModal(${idx})">
                         ${posterImg}
+                        ${ratingBadge}
                         <button class="channel-fav-btn series-fav-star ${isFav ? 'is-fav' : ''}" 
                                 title="Favoritar Série" 
                                 aria-label="${isFav ? 'Remover série dos favoritos' : 'Adicionar série aos favoritos'}"
-                                onclick="toggleSeriesFavorite(event, '${escapeHtml(sIdStr)}')">
-                            ★
-                        </button>
+                                onclick="toggleSeriesFavorite(event, '${escapeHtml(sIdStr)}')">${FAV_STAR_SVG}</button>
                         <div class="catalog-movie-title">${title}</div>
                         <div class="catalog-movie-year">${year}</div>
                     </div>
@@ -8858,7 +8958,9 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             }
 
             document.getElementById('modal-series-title-text').innerText = selectedSeries.name || 'Série';
-            document.getElementById('modal-series-meta-text').innerText = `${selectedSeries.year || ''} ${selectedSeries.rating ? '★ ' + selectedSeries.rating : ''}`;
+            const seriesRatingStr = formatRating(selectedSeries.rating);
+            const seriesMetaParts = [selectedSeries.year, seriesRatingStr].filter(Boolean);
+            document.getElementById('modal-series-meta-text').innerText = seriesMetaParts.join(' • ');
             const plotEl = document.getElementById('modal-series-plot-text');
             if (plotEl) {
                 plotEl.innerText = selectedSeries.plot || 'Carregando sinopse e episódios...';
@@ -8879,6 +8981,10 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                 const res = await fetch(`/api/catalog/series_info?id=${selectedSeries.id}&_t=${Date.now()}`, { cache: 'no-cache' });
                 const data = await res.json();
                 currentSeriesDetails = data;
+
+                const finalRating = formatRating(data.rating || selectedSeries.rating);
+                const finalMeta = [selectedSeries.year, finalRating, data.genre].filter(Boolean);
+                document.getElementById('modal-series-meta-text').innerText = finalMeta.join(' • ');
 
                 if (data.cover && pImg) {
                     pImg.src = getPosterUrl(data.cover);
@@ -9187,9 +9293,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
                         <button class="channel-fav-btn ${isFav ? 'is-fav' : ''}" 
                                 title="Favoritar" 
                                 aria-label="${isFav ? 'Remover canal dos favoritos' : 'Adicionar canal aos favoritos'}"
-                                onclick="toggleFavorite(event, '${escapeHtml(String(ch.id))}')">
-                            ★
-                        </button>
+                                onclick="toggleFavorite(event, '${escapeHtml(String(ch.id))}')">${FAV_STAR_SVG_LG}</button>
                     </div>
                 `;
 
@@ -9757,7 +9861,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v10') caches.delete(k);
+                        if (k !== 'controle-tv-v12') caches.delete(k);
                     });
                 }).catch(() => {});
             }

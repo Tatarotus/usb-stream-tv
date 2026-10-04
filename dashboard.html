@@ -207,6 +207,11 @@
             display: flex;
             gap: 8px;
             width: 100%;
+            position: sticky;
+            top: 0;
+            z-index: 95;
+            background: var(--bg);
+            padding: 8px 0;
         }
 
         .btn-mode-tab {
@@ -2912,7 +2917,7 @@
         // Estado de Séries
         let catalogSeries = [];
         let seriesCategoriesList = [];
-        let seriesCategory = 'all';
+        let seriesCategory = 'favorites';
         let seriesSearch = '';
         let seriesPage = 1;
         let seriesTotalPages = 1;
@@ -3349,7 +3354,7 @@
         }
 
         // Alternância Principal de Modo: Salvos vs Séries vs Filmes vs TV Ao Vivo
-        function switchAppMode(mode) {
+        function switchAppMode(mode, doScroll = true) {
             triggerHaptic();
             currentAppMode = mode;
             localStorage.setItem('tv_last_mode', mode);
@@ -3385,6 +3390,17 @@
                 if (secLive) secLive.style.display = 'flex';
             }
             updatePaginationUI();
+
+            if (doScroll) {
+                requestAnimationFrame(() => {
+                    const toggle = document.querySelector('.main-mode-toggle');
+                    if (toggle) {
+                        const rect = toggle.getBoundingClientRect();
+                        const targetY = window.pageYOffset + rect.top;
+                        window.scrollTo({ top: Math.max(0, targetY), behavior: 'smooth' });
+                    }
+                });
+            }
         }
 
         // ==================== NOTIFICAÇÕES PUSH E LÓGICA DO CINEMA VOD ====================
@@ -5406,24 +5422,16 @@
         }
 
         function scrollToCatalogTop() {
-            if (currentAppMode === 'saved') {
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+            const bar = document.querySelector('.fixed-remote-bar');
+            if (bar) bar.classList.remove('hidden-down');
+            const toggle = document.querySelector('.main-mode-toggle');
+            if (toggle) {
+                const rect = toggle.getBoundingClientRect();
+                const targetY = window.pageYOffset + rect.top;
+                window.scrollTo({ top: Math.max(0, targetY), behavior: 'smooth' });
                 return;
             }
-            let el = null;
-            if (currentAppMode === 'cinema') {
-                el = document.getElementById('movie-categories');
-            } else if (currentAppMode === 'series') {
-                el = document.getElementById('series-categories');
-            } else {
-                el = document.getElementById('live-categories');
-            }
-            if (el) {
-                const bar = document.querySelector('.fixed-remote-bar');
-                if (bar) bar.classList.remove('hidden-down');
-                const top = el.getBoundingClientRect().top + window.pageYOffset - 90;
-                window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
-            }
+            window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
         function updatePaginationUI() {
@@ -5772,7 +5780,7 @@
 
         // Inicialização Completa
         async function init() {
-            switchAppMode(currentAppMode);
+            switchAppMode(currentAppMode, false);
             checkIncomingShare();
             checkIosPwaBanner();
             setupKeyboardListeners();
@@ -5826,7 +5834,7 @@
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v14') caches.delete(k);
+                        if (k !== 'controle-tv-v15') caches.delete(k);
                     });
                 }).catch(() => {});
             }

@@ -202,30 +202,32 @@
             100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(250, 204, 21, 0); }
         }
 
-        /* SELETOR PRINCIPAL DE MODO: CINEMA VOD vs TV AO VIVO */
+        /* SELETOR PRINCIPAL DE MODO: SALVOS vs SÉRIES vs FILMES vs TV AO VIVO */
         .main-mode-toggle {
             display: flex;
-            gap: 12px;
+            gap: 8px;
             width: 100%;
         }
 
         .btn-mode-tab {
             flex: 1;
-            min-height: 56px;
+            min-width: 0;
+            min-height: 52px;
             background: var(--surface);
             border: 3px solid var(--border);
             border-radius: var(--btn-radius);
             color: var(--text-muted);
             font-family: var(--font-family);
-            font-size: clamp(16px, 3.8vw, 19px);
+            font-size: clamp(12px, 3.2vw, 17px);
             padding: 0 4px;
             font-weight: 900;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 8px;
+            gap: 4px;
             cursor: pointer;
             transition: all 0.15s ease;
+            white-space: nowrap;
         }
         .btn-mode-tab:active {
             transform: scale(0.96);
@@ -1314,6 +1316,57 @@
             font-weight: 600;
         }
 
+        /* Área de Salvos na TV & Chips */
+        .saved-header-card {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border: 3px solid var(--border);
+            border-radius: var(--btn-radius);
+            padding: 16px 18px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        .btn-toggle-yt {
+            background: rgba(239, 68, 68, 0.15);
+            border: 2px solid #ef4444;
+            color: #fca5a5;
+            font-size: 13px;
+            font-weight: 800;
+            padding: 7px 13px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .btn-toggle-yt:active {
+            transform: scale(0.96);
+        }
+        .saved-filter-chips {
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding: 4px 2px 8px 2px;
+            scrollbar-width: none;
+        }
+        .saved-filter-chips::-webkit-scrollbar {
+            display: none;
+        }
+        .series-saved-chip {
+            position: absolute;
+            bottom: 84px;
+            left: 14px;
+            background: rgba(20, 83, 45, 0.95);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            border: 2px solid #22c55e;
+            color: #ffffff;
+            font-size: 12px;
+            font-weight: 900;
+            padding: 4px 9px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
+            pointer-events: none;
+            z-index: 4;
+            letter-spacing: 0.3px;
+        }
+
         .active-live-badge {
             display: none;
             position: absolute;
@@ -1828,6 +1881,14 @@
             color: var(--text-dim);
             margin-top: 2px;
         }
+        .episode-card.is-ready {
+            border-color: #22c55e;
+            background: rgba(34, 197, 94, 0.08);
+        }
+        .episode-card.is-downloading {
+            border-color: var(--gold);
+            background: rgba(250, 204, 21, 0.08);
+        }
         .episode-actions-row {
             display: flex;
             gap: 10px;
@@ -1837,10 +1898,10 @@
         .btn-ep-save-senior {
             flex: 1;
             min-height: 48px;
-            background: #15803d;
-            border: 2px solid #22c55e;
+            background: #1e3a8a;
+            border: 2px solid #3b82f6;
             color: #ffffff;
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 900;
             border-radius: 10px;
             cursor: pointer;
@@ -1851,8 +1912,61 @@
             transition: all 0.1s ease;
         }
         .btn-ep-save-senior:active {
-            background: #166534;
+            background: #1e40af;
             transform: scale(0.97);
+        }
+        .btn-ep-ready-play {
+            flex: 1.4;
+            min-height: 48px;
+            background: #15803d;
+            border: 2px solid #22c55e;
+            color: #ffffff;
+            font-size: 15px;
+            font-weight: 900;
+            border-radius: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: all 0.1s ease;
+            box-shadow: 0 4px 12px rgba(34, 197, 94, 0.25);
+        }
+        .btn-ep-ready-play:active {
+            background: #16a34a;
+            transform: scale(0.97);
+        }
+        .btn-ep-ready-del {
+            min-width: 48px;
+            min-height: 48px;
+            background: rgba(239, 68, 68, 0.15);
+            border: 2px solid #ef4444;
+            color: #fca5a5;
+            font-size: 18px;
+            border-radius: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.1s ease;
+        }
+        .btn-ep-ready-del:active {
+            transform: scale(0.94);
+        }
+        .btn-ep-downloading {
+            flex: 1.4;
+            min-height: 48px;
+            background: rgba(250, 204, 21, 0.15);
+            border: 2px solid var(--gold);
+            color: var(--gold);
+            font-size: 14px;
+            font-weight: 900;
+            border-radius: 10px;
+            cursor: default;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: pulse-gold 1.5s infinite;
         }
         .btn-ep-play-senior {
             flex: 0 0 54px;
@@ -2295,21 +2409,89 @@
             </button>
         </header>
 
-        <!-- SELETOR PRINCIPAL DE MODO: FILMES vs SÉRIES vs TV AO VIVO -->
+        <!-- SELETOR PRINCIPAL DE MODO: SALVOS vs SÉRIES vs FILMES vs TV AO VIVO -->
         <div class="main-mode-toggle" role="tablist">
-            <button id="tab-cinema" class="btn-mode-tab active" role="tab" aria-selected="true" onclick="switchAppMode('cinema')">
-                🎬 FILMES
+            <button id="tab-saved" class="btn-mode-tab" role="tab" aria-selected="false" onclick="switchAppMode('saved')">
+                <span id="tab-saved-text">💾 SALVOS</span>
             </button>
             <button id="tab-series" class="btn-mode-tab" role="tab" aria-selected="false" onclick="switchAppMode('series')">
                 🍿 SÉRIES
             </button>
+            <button id="tab-cinema" class="btn-mode-tab" role="tab" aria-selected="false" onclick="switchAppMode('cinema')">
+                🎬 FILMES
+            </button>
             <button id="tab-live" class="btn-mode-tab" role="tab" aria-selected="false" onclick="switchAppMode('live')">
-                📺 TV AO VIVO
+                📺 AO VIVO
             </button>
         </div>
 
         <!-- Banner de Confirmação de Ação (Aviso Longo) -->
         <div id="action-banner" class="action-banner" role="status" aria-live="polite"></div>
+
+        <!-- ==================== ÁREA DA MEMÓRIA DA TV (SALVOS & BAIXADOS) ==================== -->
+        <div id="section-saved" style="display: none; flex-direction: column; gap: 16px;">
+            <!-- Cartão Informativo de Armazenamento -->
+            <div class="saved-header-card">
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 26px;">💾</span>
+                        <div>
+                            <div style="font-size: 19px; font-weight: 900; color: #fff;">Prontos na Memória da TV</div>
+                            <div id="saved-disk-info" style="font-size: 14px; font-weight: 700; color: var(--text-muted);">
+                                Tocam direto do pendrive sem internet e sem travar
+                            </div>
+                        </div>
+                    </div>
+                    <button id="btn-toggle-yt" class="btn-toggle-yt" onclick="toggleYtDrawer()">
+                        ▶️ + YouTube
+                    </button>
+                </div>
+
+                <!-- Gaveta do YouTube (Oculta por padrão para não confundir o idoso) -->
+                <div id="saved-yt-drawer" style="display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.12);">
+                    <div style="font-size: 15px; font-weight: 800; color: var(--gold); margin-bottom: 8px;">
+                        Assistir ou Salvar Vídeo do YouTube na TV:
+                    </div>
+                    <div class="search-box-wrapper">
+                        <input id="yt-url-input" class="senior-search-input" type="text"
+                               placeholder="Cole o link do YouTube aqui..."
+                               oninput="onYtInput(this.value)" autocomplete="off">
+                        <button id="yt-clear-btn" class="btn-clear-search" onclick="clearYtInput()" style="display: none;" title="Limpar">✕</button>
+                    </div>
+                    <div class="yt-actions-row" style="margin-top: 10px;">
+                        <button id="btn-yt-live" class="btn-yt-action btn-yt-live" onclick="playYouTubeLive()">
+                            ▶️ ASSISTIR AGORA NA TV
+                        </button>
+                        <button id="btn-yt-save" class="btn-yt-action btn-yt-save" onclick="saveYouTubeVod()">
+                            📥 SALVAR NA TV (COM PAUSA)
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Fila de Downloads Ativos na Memória -->
+            <div id="saved-active-section" style="display: none;">
+                <div class="section-title" style="margin-bottom: 8px; color: var(--gold);">
+                    ⏳ Baixando Agora para a TV:
+                </div>
+                <div id="saved-active-list" class="active-downloads-list"></div>
+            </div>
+
+            <!-- Filtros de Conteúdo Salvo -->
+            <div class="saved-filter-chips" role="tablist" aria-label="Filtros de conteúdo salvo">
+                <button id="filter-saved-all" class="cat-chip active" onclick="setSavedFilter('all')">⭐ Todos (0)</button>
+                <button id="filter-saved-series" class="cat-chip" onclick="setSavedFilter('series')">🍿 Séries (0)</button>
+                <button id="filter-saved-movies" class="cat-chip" onclick="setSavedFilter('movies')">🎬 Filmes (0)</button>
+                <button id="filter-saved-yt" class="cat-chip" onclick="setSavedFilter('yt')">▶️ YouTube (0)</button>
+            </div>
+
+            <!-- Grade de 2 Colunas com os Itens Salvos -->
+            <div id="saved-shelf-list" class="vod-grid-2col">
+                <div style="text-align: center; padding: 24px 10px; color: var(--text-muted); font-size: 17px; grid-column: 1 / -1;">
+                    Verificando arquivos salvos na TV...
+                </div>
+            </div>
+        </div>
 
         <!-- ==================== ÁREA DO MODO CINEMA & FILMES ==================== -->
         <div id="section-cinema" style="display: flex; flex-direction: column; gap: 18px;">
@@ -3166,32 +3348,38 @@
             return pin;
         }
 
-        // Alternância Principal de Modo: Filmes vs Séries vs TV Ao Vivo
+        // Alternância Principal de Modo: Salvos vs Séries vs Filmes vs TV Ao Vivo
         function switchAppMode(mode) {
             triggerHaptic();
             currentAppMode = mode;
             localStorage.setItem('tv_last_mode', mode);
 
-            const tabCinema = document.getElementById('tab-cinema');
+            const tabSaved = document.getElementById('tab-saved');
             const tabSeries = document.getElementById('tab-series');
+            const tabCinema = document.getElementById('tab-cinema');
             const tabLive = document.getElementById('tab-live');
-            const secCinema = document.getElementById('section-cinema');
+            const secSaved = document.getElementById('section-saved');
             const secSeries = document.getElementById('section-series');
+            const secCinema = document.getElementById('section-cinema');
             const secLive = document.getElementById('section-live');
 
-            [tabCinema, tabSeries, tabLive].forEach(t => {
+            [tabSaved, tabSeries, tabCinema, tabLive].forEach(t => {
                 if (t) { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); }
             });
-            [secCinema, secSeries, secLive].forEach(s => {
+            [secSaved, secSeries, secCinema, secLive].forEach(s => {
                 if (s) s.style.display = 'none';
             });
 
-            if (mode === 'cinema') {
-                if (tabCinema) { tabCinema.classList.add('active'); tabCinema.setAttribute('aria-selected', 'true'); }
-                if (secCinema) secCinema.style.display = 'flex';
+            if (mode === 'saved') {
+                if (tabSaved) { tabSaved.classList.add('active'); tabSaved.setAttribute('aria-selected', 'true'); }
+                if (secSaved) secSaved.style.display = 'flex';
+                renderSavedShelf();
             } else if (mode === 'series') {
                 if (tabSeries) { tabSeries.classList.add('active'); tabSeries.setAttribute('aria-selected', 'true'); }
                 if (secSeries) secSeries.style.display = 'flex';
+            } else if (mode === 'cinema') {
+                if (tabCinema) { tabCinema.classList.add('active'); tabCinema.setAttribute('aria-selected', 'true'); }
+                if (secCinema) secCinema.style.display = 'flex';
             } else {
                 if (tabLive) { tabLive.classList.add('active'); tabLive.setAttribute('aria-selected', 'true'); }
                 if (secLive) secLive.style.display = 'flex';
@@ -3305,11 +3493,8 @@
         // Controle de Abertura e Fechamento da Central de Memória da TV e YouTube
         function openDownloadsModal() {
             triggerHaptic();
-            const modal = document.getElementById('downloads-modal');
-            if (modal) {
-                modal.style.display = 'flex';
-                document.body.style.overflow = 'hidden';
-            }
+            switchAppMode('saved');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
         function closeDownloadsModal() {
@@ -3318,6 +3503,95 @@
                 modal.style.display = 'none';
                 document.body.style.overflow = '';
             }
+        }
+
+        function toggleYtDrawer() {
+            triggerHaptic();
+            const drawer = document.getElementById('saved-yt-drawer');
+            const btn = document.getElementById('btn-toggle-yt');
+            if (!drawer) return;
+            const isOpen = drawer.style.display !== 'none';
+            drawer.style.display = isOpen ? 'none' : 'block';
+            if (btn) btn.innerText = isOpen ? '▶️ + YouTube' : '✕ Fechar';
+            if (!isOpen) {
+                const inp = document.getElementById('yt-url-input');
+                if (inp) inp.focus();
+            }
+        }
+
+        let savedFilter = 'all';
+
+        function setSavedFilter(filter) {
+            triggerHaptic();
+            savedFilter = filter;
+            ['all', 'series', 'movies', 'yt'].forEach(f => {
+                const btn = document.getElementById(`filter-saved-${f}`);
+                if (btn) {
+                    btn.classList.toggle('active', f === filter);
+                }
+            });
+            renderSavedShelf();
+        }
+
+        function isSeriesTask(task) {
+            if (!task) return false;
+            if (task.series_id) return true;
+            const url = (task.url || '').toLowerCase();
+            if (url.includes('/series/')) return true;
+            const title = (task.title || task.display_name || '').toLowerCase();
+            return /\bs\d{1,2}e\d{1,2}\b/i.test(title) || /temporada|epis[oó]dio/i.test(title);
+        }
+
+        function isYtTask(task) {
+            if (!task) return false;
+            const url = (task.url || '').toLowerCase();
+            return url.includes('youtube.com') || url.includes('youtu.be') || (task.title && task.title.toLowerCase().includes('youtube'));
+        }
+
+        function isMovieTask(task) {
+            if (!task) return false;
+            return !isSeriesTask(task) && !isYtTask(task);
+        }
+
+        function findTaskForEpisode(ep) {
+            if (!ep || !vodTasks || !vodTasks.length) return null;
+            const epUrl = (ep.url || '').trim();
+            if (!epUrl) return null;
+
+            const cleanEpUrl = epUrl.split('?')[0];
+            let task = vodTasks.find(t => {
+                if (!t.url) return false;
+                return t.url.split('?')[0] === cleanEpUrl;
+            });
+            if (task) return task;
+
+            if (selectedSeries && ep.episode_num) {
+                const sName = (selectedSeries.name || '').toLowerCase().trim();
+                const epNum = String(ep.episode_num);
+                task = vodTasks.find(t => {
+                    if (!t.url || !t.url.includes('/series/')) return false;
+                    const tTitle = (t.title || t.display_name || '').toLowerCase();
+                    if (!tTitle.includes(sName)) return false;
+                    const regex = new RegExp(`(s\\d+e0*${epNum}|ep(is[oó]dio)?\\s*0*${epNum})\\b`, 'i');
+                    return regex.test(tTitle);
+                });
+            }
+            return task;
+        }
+
+        function isTaskForSeries(task, s) {
+            if (!task || !s) return false;
+            if (task.series_id && String(task.series_id) === String(s.id)) return true;
+            if (!task.url || !task.url.includes('/series/')) return false;
+            const sName = (s.name || '').toLowerCase().trim();
+            if (!sName) return false;
+            const tTitle = (task.title || task.display_name || '').toLowerCase().trim().replace(/^@\s*/, '');
+            return tTitle.startsWith(sName) || tTitle.includes(sName);
+        }
+
+        function countSavedEpisodesForSeries(s) {
+            if (!s || !vodTasks) return 0;
+            return vodTasks.filter(t => t.status === 'ready' && isTaskForSeries(t, s)).length;
         }
 
         // Carrega Filmes Salvos da TV (/api/vod/status)
@@ -3348,8 +3622,11 @@
 
                 // 2. Atualiza Espaço Livre na TV
                 const diskBadge = document.getElementById('vod-disk-badge');
-                if (diskBadge && data.disk && data.disk.total_gb > 0) {
-                    diskBadge.innerHTML = `💾 Espaço TV: <strong>${data.disk.free_gb} GB livres</strong> de ${data.disk.total_gb} GB`;
+                const savedDisk = document.getElementById('saved-disk-info');
+                if (data.disk && data.disk.total_gb > 0) {
+                    const diskText = `💾 Espaço TV: <strong>${data.disk.free_gb} GB livres</strong> de ${data.disk.total_gb} GB`;
+                    if (diskBadge) diskBadge.innerHTML = diskText;
+                    if (savedDisk) savedDisk.innerHTML = `${diskText} • Tocam direto sem internet`;
                 }
 
                 // 3. Atualiza Badge Dinâmica de Mídia no Glance Header
@@ -3373,12 +3650,12 @@
                         headerMediaText.innerText = `${readyTasks.length} ${readyTasks.length === 1 ? 'Salvo na TV' : 'Salvos na TV'}`;
                     } else {
                         headerMediaBadge.className = 'header-media-badge';
-                        if (headerMediaIcon) headerMediaIcon.innerText = '📥';
-                        headerMediaText.innerText = 'Memória da TV & YouTube';
+                        if (headerMediaIcon) headerMediaIcon.innerText = '💾';
+                        headerMediaText.innerText = 'Salvos na TV';
                     }
                 }
 
-                // 4. Notificação Automática quando um Filme termina o download e fica pronto
+                // 4. Notificação Automática quando um Conteúdo termina o download e fica pronto
                 if (knownReadyTasks === null) {
                     // Inicialização silenciosa para não disparar notificações de downloads antigos
                     knownReadyTasks = new Set(readyTasks.map(t => String(t.id)));
@@ -3394,16 +3671,23 @@
                     });
                 }
 
-                renderVodShelf();
+                renderSavedShelf();
+
+                // 5. Se o modal de série estiver aberto, atualiza episódios dinamicamente
+                const sModal = document.getElementById('series-modal');
+                if (sModal && sModal.style.display !== 'none' && selectedSeries && currentSeriesDetails) {
+                    const activeSeasonEl = document.querySelector('#series-seasons-bar .season-chip.active');
+                    if (activeSeasonEl) {
+                        const sMatch = activeSeasonEl.innerText.match(/(\d+)/);
+                        const sNum = sMatch ? sMatch[1] : (currentSeriesDetails.seasons ? currentSeriesDetails.seasons[0].season_number : '1');
+                        renderEpisodesForSeason(sNum);
+                    }
+                }
             } catch (err) {}
         }
 
-        // Renderiza a Prateleira de Filmes Prontos e em Download
-        function renderVodShelf() {
-            const activeSec = document.getElementById('active-downloads-section');
-            const activeList = document.getElementById('active-downloads-list');
-            const shelf = document.getElementById('vod-shelf-list');
-
+        // Renderiza a Prateleira de Conteúdos Salvos (Séries, Filmes e YouTube) e Downloads Ativos
+        function renderSavedShelf() {
             // Ordena tarefas para que os VODs mais recentes fiquem no topo da pilha
             const sortByRecent = (a, b) => {
                 const timeA = a.created_at || a.updated_at || 0;
@@ -3412,126 +3696,184 @@
                 return 0;
             };
 
-            const readyTasks = vodTasks.filter(t => t.status === 'ready').sort(sortByRecent);
-            const inProgressTasks = vodTasks.filter(t => ['processing', 'queued', 'pending', 'downloading', 'converting'].includes(t.status)).sort(sortByRecent);
-            const errorTasks = vodTasks.filter(t => t.status === 'error').sort(sortByRecent);
+            const readyTasks = (vodTasks || []).filter(t => t.status === 'ready').sort(sortByRecent);
+            const inProgressTasks = (vodTasks || []).filter(t => ['processing', 'queued', 'pending', 'downloading', 'converting'].includes(t.status)).sort(sortByRecent);
+            const errorTasks = (vodTasks || []).filter(t => t.status === 'error').sort(sortByRecent);
 
-            // 1. Renderiza Fila de Downloads Ativos e Falhas (Largura Total para Máxima Legibilidade)
-            if (activeSec && activeList) {
-                if (inProgressTasks.length > 0 || errorTasks.length > 0) {
-                    activeSec.style.display = 'block';
-                    let activeHtml = '';
+            // Atualiza contadores dos filtros
+            const allCount = readyTasks.length;
+            const seriesCount = readyTasks.filter(isSeriesTask).length;
+            const moviesCount = readyTasks.filter(isMovieTask).length;
+            const ytCount = readyTasks.filter(isYtTask).length;
 
-                    // Downloads em andamento
-                    inProgressTasks.forEach(task => {
-                        const title = escapeHtml(task.title || task.display_name || 'Vídeo');
-                        const safeId = escapeHtml(task.id);
-                        const prog = task.progress ? Math.round(task.progress) : 0;
-                        const statusMsg = escapeHtml(task.status_msg || 'Baixando e preparando para a TV...');
-                        const speed = task.speed ? escapeHtml(task.speed) : '';
+            const btnAll = document.getElementById('filter-saved-all');
+            const btnSeries = document.getElementById('filter-saved-series');
+            const btnMovies = document.getElementById('filter-saved-movies');
+            const btnYt = document.getElementById('filter-saved-yt');
+            const tabSavedText = document.getElementById('tab-saved-text');
 
-                        let routeHtml = '';
-                        const urlLower = (task.url || '').toLowerCase();
-                        const isYt = urlLower.includes('youtube.com') || urlLower.includes('youtu.be') || title.toLowerCase().includes('youtube');
-                        const isProxy = (task.status_msg || '').toLowerCase().includes('residencial') || (task.status_msg || '').toLowerCase().includes('proxy');
+            if (btnAll) btnAll.innerText = `⭐ Todos (${allCount})`;
+            if (btnSeries) btnSeries.innerText = `🍿 Séries (${seriesCount})`;
+            if (btnMovies) btnMovies.innerText = `🎬 Filmes (${moviesCount})`;
+            if (btnYt) btnYt.innerText = `▶️ YouTube (${ytCount})`;
+            if (tabSavedText) tabSavedText.innerText = allCount > 0 ? `💾 SALVOS (${allCount})` : '💾 SALVOS';
 
-                        if (isYt) {
-                            routeHtml = `<span class="badge-route badge-yt">▶️ Vídeo do YouTube</span>`;
-                        } else if (isProxy) {
-                            routeHtml = `<span class="badge-route badge-proxy">📶 Conexão via Proxy Tablet</span>`;
-                        } else {
-                            routeHtml = `<span class="badge-route badge-direct">⚡ Download Direto Rápido</span>`;
-                        }
+            // 1. Renderiza Fila de Downloads Ativos e Falhas
+            const activeSections = [
+                { sec: document.getElementById('saved-active-section'), list: document.getElementById('saved-active-list') },
+                { sec: document.getElementById('active-downloads-section'), list: document.getElementById('active-downloads-list') }
+            ];
 
-                        const posterImg = task.poster 
-                            ? `<img class="vod-poster-thumb" src="${escapeHtml(task.poster)}" alt="" onerror="this.outerHTML='<div class=\\'vod-poster-thumb\\'>⏳</div>'">`
-                            : `<div class="vod-poster-thumb">⏳</div>`;
+            let activeHtml = '';
+            if (inProgressTasks.length > 0 || errorTasks.length > 0) {
+                // Downloads em andamento
+                inProgressTasks.forEach(task => {
+                    const title = escapeHtml(task.title || task.display_name || 'Vídeo');
+                    const safeId = escapeHtml(task.id);
+                    const prog = task.progress ? Math.round(task.progress) : 0;
+                    const statusMsg = escapeHtml(task.status_msg || 'Baixando e preparando para a TV...');
+                    const speed = task.speed ? escapeHtml(task.speed) : '';
 
-                        activeHtml += `
-                            <div class="vod-movie-card vod-downloading-card" role="region" aria-label="Baixando ${title}">
-                                <div class="vod-card-top">
-                                    ${posterImg}
-                                    <div class="vod-details">
-                                        <div class="vod-title">${title}</div>
-                                        <div class="vod-badges-row">
-                                            ${routeHtml}
-                                            <span class="badge-pct">${prog}%</span>
-                                        </div>
+                    let routeHtml = '';
+                    if (isYtTask(task)) {
+                        routeHtml = `<span class="badge-route badge-yt">▶️ Vídeo do YouTube</span>`;
+                    } else if (isSeriesTask(task)) {
+                        routeHtml = `<span class="badge-route" style="background:#7c3aed; border-color:#a78bfa;">🍿 Episódio de Série</span>`;
+                    } else if ((task.status_msg || '').toLowerCase().includes('residencial') || (task.status_msg || '').toLowerCase().includes('proxy')) {
+                        routeHtml = `<span class="badge-route badge-proxy">📶 Conexão via Proxy Tablet</span>`;
+                    } else {
+                        routeHtml = `<span class="badge-route badge-direct">⚡ Download Direto Rápido</span>`;
+                    }
+
+                    const fallbackIcon = isSeriesTask(task) ? '🍿' : (isYtTask(task) ? '▶️' : '🎬');
+                    const posterImg = task.poster 
+                        ? `<img class="vod-poster-thumb" src="${escapeHtml(task.poster)}" alt="" onerror="this.outerHTML='<div class=\\'vod-poster-thumb\\'>${fallbackIcon}</div>'">`
+                        : `<div class="vod-poster-thumb">${fallbackIcon}</div>`;
+
+                    activeHtml += `
+                        <div class="vod-movie-card vod-downloading-card" role="region" aria-label="Baixando ${title}">
+                            <div class="vod-card-top">
+                                ${posterImg}
+                                <div class="vod-details">
+                                    <div class="vod-title">${title}</div>
+                                    <div class="vod-badges-row">
+                                        ${routeHtml}
+                                        <span class="badge-pct">${prog}%</span>
                                     </div>
                                 </div>
+                            </div>
 
-                                <div class="vod-status-detail">💬 ${statusMsg}</div>
-                                ${speed ? `<div class="vod-speed-detail">🚀 Velocidade: ${speed}</div>` : ''}
+                            <div class="vod-status-detail">💬 ${statusMsg}</div>
+                            ${speed ? `<div class="vod-speed-detail">🚀 Velocidade: ${speed}</div>` : ''}
 
-                                <div class="vod-progress-bar-wrap" role="progressbar" aria-valuenow="${prog}" aria-valuemin="0" aria-valuemax="100">
-                                    <div class="vod-progress-bar-fill" style="width: ${prog}%;"></div>
-                                </div>
+                            <div class="vod-progress-bar-wrap" role="progressbar" aria-valuenow="${prog}" aria-valuemin="0" aria-valuemax="100">
+                                <div class="vod-progress-bar-fill" style="width: ${prog}%;"></div>
+                            </div>
 
-                                <div style="display: flex; justify-content: flex-end; margin-top: 6px;">
-                                    <button class="btn-cancel-vod" onclick="cancelVodTask('${safeId}', '${title}')">
-                                        ✕ Cancelar Download
-                                    </button>
+                            <div style="display: flex; justify-content: flex-end; margin-top: 6px;">
+                                <button class="btn-cancel-vod" onclick="cancelVodTask('${safeId}', '${title}')">
+                                    ✕ Cancelar Download
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                // Falhas
+                errorTasks.forEach(task => {
+                    const title = escapeHtml(task.title || task.display_name || 'Vídeo');
+                    const safeId = escapeHtml(task.id);
+                    const errMsg = escapeHtml(task.error || task.status_msg || 'Erro ao preparar vídeo');
+                    activeHtml += `
+                        <div class="vod-movie-card" style="border-color: #ef4444; background: #1e1b2e;">
+                            <div class="vod-card-top">
+                                <div class="vod-poster-thumb" style="background: rgba(239,68,68,0.2); color: #ef4444;">⚠️</div>
+                                <div class="vod-details">
+                                    <div class="vod-title">${title}</div>
+                                    <div class="vod-meta" style="color: #f87171;">Não foi possível baixar: ${errMsg}</div>
                                 </div>
                             </div>
-                        `;
-                    });
-
-                    // Falhas
-                    errorTasks.forEach(task => {
-                        const title = escapeHtml(task.title || task.display_name || 'Vídeo');
-                        const safeId = escapeHtml(task.id);
-                        const errMsg = escapeHtml(task.error || task.status_msg || 'Erro ao preparar vídeo');
-                        activeHtml += `
-                            <div class="vod-movie-card" style="border-color: #ef4444; background: #1e1b2e;">
-                                <div class="vod-card-top">
-                                    <div class="vod-poster-thumb" style="background: rgba(239,68,68,0.2); color: #ef4444;">⚠️</div>
-                                    <div class="vod-details">
-                                        <div class="vod-title">${title}</div>
-                                        <div class="vod-meta" style="color: #f87171;">Não foi possível baixar: ${errMsg}</div>
-                                    </div>
-                                </div>
-                                <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
-                                    <button class="btn-delete-vod" onclick="deleteVodTask('${safeId}', '${title}')">
-                                        ✕ Remover da Lista
-                                    </button>
-                                </div>
+                            <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
+                                <button class="btn-delete-vod" onclick="deleteVodTask('${safeId}', '${title}')">
+                                    ✕ Remover da Lista
+                                </button>
                             </div>
-                        `;
-                    });
-
-                    activeList.innerHTML = activeHtml;
-                } else {
-                    activeSec.style.display = 'none';
-                    activeList.innerHTML = '';
-                }
+                        </div>
+                    `;
+                });
             }
 
-            // 2. Renderiza Prateleira de Prontos na Grade de 2 Colunas
-            if (!shelf) return;
+            activeSections.forEach(({ sec, list }) => {
+                if (!sec || !list) return;
+                if (inProgressTasks.length > 0 || errorTasks.length > 0) {
+                    sec.style.display = 'block';
+                    list.innerHTML = activeHtml;
+                } else {
+                    sec.style.display = 'none';
+                    list.innerHTML = '';
+                }
+            });
 
+            // 2. Filtra os Itens Prontos Conforme a Aba Selecionada
+            let filteredTasks = readyTasks;
+            if (savedFilter === 'series') {
+                filteredTasks = readyTasks.filter(isSeriesTask);
+            } else if (savedFilter === 'movies') {
+                filteredTasks = readyTasks.filter(isMovieTask);
+            } else if (savedFilter === 'yt') {
+                filteredTasks = readyTasks.filter(isYtTask);
+            }
+
+            // 3. Renderiza Prateleira de Prontos na Grade de 2 Colunas
+            const shelfElements = [
+                document.getElementById('saved-shelf-list'),
+                document.getElementById('vod-shelf-list')
+            ].filter(Boolean);
+
+            if (shelfElements.length === 0) return;
+
+            let emptyHtml = '';
             if (readyTasks.length === 0) {
-                shelf.innerHTML = `
-                    <div style="text-align: center; padding: 26px 14px; background: var(--surface); border: 2px dashed var(--border); border-radius: var(--btn-radius); color: var(--text-muted); font-size: 16px; line-height: 1.5; grid-column: 1 / -1;">
-                        🍿 Nenhum filme ou série pronto na TV no momento.<br>
-                        <strong>Escolha um título no catálogo de Filmes ou Séries, ou cole um link do YouTube acima!</strong>
+                emptyHtml = `
+                    <div style="text-align: center; padding: 32px 14px; background: var(--surface); border: 2px dashed var(--border); border-radius: var(--btn-radius); color: var(--text-muted); font-size: 16px; line-height: 1.5; grid-column: 1 / -1;">
+                        💾 Nenhum filme ou série salvo na TV ainda.<br>
+                        <span style="font-size: 15px; color: var(--gold); margin-top: 8px; display: inline-block;">
+                            Abra o catálogo de <strong>SÉRIES</strong> ou <strong>FILMES</strong> e toque em <strong>Baixar para a TV</strong> para assistir sem internet e sem travar!
+                        </span>
                     </div>
                 `;
+            } else if (filteredTasks.length === 0) {
+                let filterName = 'itens correspondentes';
+                if (savedFilter === 'series') filterName = 'séries salvas';
+                else if (savedFilter === 'movies') filterName = 'filmes salvos';
+                else if (savedFilter === 'yt') filterName = 'vídeos do YouTube';
+
+                emptyHtml = `
+                    <div style="text-align: center; padding: 28px 14px; background: var(--surface); border: 2px dashed var(--border); border-radius: var(--btn-radius); color: var(--text-muted); font-size: 16px; line-height: 1.5; grid-column: 1 / -1;">
+                        Nenhum item em <strong>${filterName}</strong>.<br>
+                        <span style="font-size: 14px; color: var(--text-muted); margin-top: 6px; display: inline-block;">
+                            Você possui outros arquivos prontos na aba <strong>Todos (${allCount})</strong>!
+                        </span>
+                    </div>
+                `;
+            }
+
+            if (emptyHtml) {
+                shelfElements.forEach(el => { el.innerHTML = emptyHtml; });
                 return;
             }
 
             let html = '';
-            readyTasks.forEach(task => {
+            filteredTasks.forEach(task => {
                 const isPlaying = (task.id === activeVodTask);
-                let rawTitle = (task.title || task.display_name || 'Vídeo').trim();
-                rawTitle = rawTitle.replace(/^@\s*/, '');
+                let rawTitle = (task.title || task.display_name || 'Vídeo').trim().replace(/^@\s*/, '');
                 const title = escapeHtml(rawTitle);
                 const safeId = escapeHtml(task.id);
                 const epInfo = extractSeasonEpisode(rawTitle);
                 const epBadge = epInfo ? `<div class="vod-grid-ep-badge">🏷️ ${escapeHtml(epInfo)}</div>` : '';
 
-                const urlLower = (task.url || '').toLowerCase();
-                const isYt = urlLower.includes('youtube.com') || urlLower.includes('youtu.be') || title.toLowerCase().includes('youtube');
-                const isSeries = Boolean(epInfo) || title.includes(' - ') || title.toLowerCase().includes('temporada') || title.toLowerCase().includes('episodio') || title.toLowerCase().includes('ep ');
+                const isYt = isYtTask(task);
+                const isSeries = isSeriesTask(task);
 
                 let badgeHtml = '';
                 if (isPlaying) {
@@ -3544,9 +3886,10 @@
                     badgeHtml = `<span class="vod-grid-badge">🎬 FILME</span>`;
                 }
 
+                const fallbackIcon = isSeries ? '🍿' : (isYt ? '▶️' : '🎬');
                 const posterImg = task.poster 
-                    ? `<img class="vod-grid-poster-img" src="${escapeHtml(task.poster)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=\\'vod-grid-poster-fallback\\'>🎬</div>'">`
-                    : `<div class="vod-grid-poster-fallback">🎬</div>`;
+                    ? `<img class="vod-grid-poster-img" src="${escapeHtml(task.poster)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=\\'vod-grid-poster-fallback\\'>${fallbackIcon}</div>'">`
+                    : `<div class="vod-grid-poster-fallback">${fallbackIcon}</div>`;
 
                 html += `
                     <div class="vod-grid-card ${isPlaying ? 'active' : ''}" role="region" aria-label="${title}" onclick="openVodDetailsModal('${safeId}')" style="cursor: pointer;">
@@ -3557,10 +3900,10 @@
                         <div class="vod-grid-body">
                             <div class="vod-grid-title" title="${title}">${title}</div>
                             ${epBadge}
-                            <button class="btn-vod-grid-play" onclick="event.stopPropagation(); playVodTask('${safeId}', '${title}')" aria-label="Assistir ${title} na TV">
+                            <button class="btn-vod-grid-play" onclick="event.stopPropagation(); playVodTask('${safeId}')" aria-label="Assistir ${title} na TV">
                                 ▶️ ASSISTIR
                             </button>
-                            <button class="btn-vod-grid-delete" onclick="event.stopPropagation(); deleteVodTask('${safeId}', '${title}')" aria-label="Excluir ${title}">
+                            <button class="btn-vod-grid-delete" onclick="event.stopPropagation(); deleteVodTask('${safeId}')" aria-label="Excluir ${title}">
                                 🗑️ Excluir
                             </button>
                         </div>
@@ -3568,7 +3911,12 @@
                 `;
             });
 
-            shelf.innerHTML = html;
+            shelfElements.forEach(el => { el.innerHTML = html; });
+        }
+
+        // Alias para compatibilidade legada
+        function renderVodShelf() {
+            renderSavedShelf();
         }
 
         // Extrator inteligente de Temporada e Episódio
@@ -3715,11 +4063,13 @@
             openWebPlayerVod(task.id, title);
         }
 
-        // Tocar Filme do Cinema VOD na TV
+        // Tocar Filme ou Série VOD na TV
         async function playVodTask(taskId, title) {
             triggerHaptic();
             const pin = getAuthPin();
-            showActionBanner(`Iniciando <strong>${escapeHtml(title)}</strong> no Cinema da TV... Aguarde.`);
+            const task = vodTasks ? vodTasks.find(t => String(t.id) === String(taskId)) : null;
+            const displayTitle = title || (task ? (task.title || task.display_name) : 'Vídeo');
+            showActionBanner(`Iniciando <strong>${escapeHtml(displayTitle)}</strong> na TV... Aguarde.`);
 
             try {
                 const res = await fetch('/api/vod/play', {
@@ -3729,10 +4079,10 @@
                 });
                 const data = await res.json();
                 if (data.success) {
-                    showActionBanner(`✓ <strong>${escapeHtml(title)}</strong> reproduzindo na TV!`, 'success');
+                    showActionBanner(`✓ <strong>${escapeHtml(displayTitle)}</strong> reproduzindo na TV!`, 'success');
                     pollVodStatus();
                 } else {
-                    showActionBanner(`Não foi possível iniciar o filme.`, 'warn');
+                    showActionBanner(`Não foi possível iniciar o vídeo.`, 'warn');
                 }
             } catch (err) {
                 showActionBanner(`Erro ao comunicar com a TV.`, 'warn');
@@ -3742,9 +4092,11 @@
         // Cancelar Download VOD em Andamento
         async function cancelVodTask(taskId, title) {
             triggerHaptic();
-            if (!confirm(`Deseja cancelar o download do filme "${title}"?`)) return;
+            const task = vodTasks ? vodTasks.find(t => String(t.id) === String(taskId)) : null;
+            const displayTitle = title || (task ? (task.title || task.display_name) : 'Vídeo');
+            if (!confirm(`Deseja cancelar o download de "${displayTitle}"?`)) return;
             const pin = getAuthPin();
-            showActionBanner(`Cancelando download de <strong>${escapeHtml(title)}</strong>...`);
+            showActionBanner(`Cancelando download de <strong>${escapeHtml(displayTitle)}</strong>...`);
 
             try {
                 const res = await fetch('/api/vod/delete', {
@@ -3759,10 +4111,12 @@
             }
         }
 
-        // Excluir Filme do VOD
+        // Excluir Filme ou Série do VOD
         async function deleteVodTask(taskId, title) {
             triggerHaptic();
-            if (!confirm(`Deseja mesmo excluir o filme "${title}" da TV?`)) return;
+            const task = vodTasks ? vodTasks.find(t => String(t.id) === String(taskId)) : null;
+            const displayTitle = title || (task ? (task.title || task.display_name) : 'Vídeo');
+            if (!confirm(`Deseja mesmo excluir "${displayTitle}" da TV para liberar espaço?`)) return;
             const pin = getAuthPin();
 
             try {
@@ -3771,7 +4125,7 @@
                     headers: { 'Content-Type': 'application/json', 'X-Auth-PIN': pin },
                     body: JSON.stringify({ task_id: taskId, pin: pin })
                 });
-                showActionBanner(`Filme removido da TV.`, 'info');
+                showActionBanner(`✓ "${escapeHtml(displayTitle)}" removido da TV.`, 'info');
                 pollVodStatus();
             } catch (err) {}
         }
@@ -4120,6 +4474,19 @@
             return url;
         }
 
+        function isMovieSaved(m) {
+            if (!m || !vodTasks || !vodTasks.length) return false;
+            const mName = (m.name || '').toLowerCase().trim();
+            const sId = m.stream_id ? String(m.stream_id) : null;
+            return vodTasks.some(t => {
+                if (t.status !== 'ready' || !isMovieTask(t)) return false;
+                const tTitle = (t.title || t.display_name || '').toLowerCase().trim().replace(/^@\s*/, '');
+                if (tTitle === mName || tTitle.startsWith(mName)) return true;
+                if (sId && t.url && (t.url.includes(`/${sId}.`) || t.url.includes(`/${sId}?`))) return true;
+                return false;
+            });
+        }
+
         function renderCatalogMovies() {
             const grid = document.getElementById('catalog-movies-grid');
             if (!grid) return;
@@ -4138,6 +4505,8 @@
                 const title = escapeHtml(m.name || 'Filme');
                 const year = escapeHtml(m.year || '');
                 const ratingBadge = getRatingBadgeHtml(m.rating);
+                const isSaved = isMovieSaved(m);
+                const savedBadge = isSaved ? `<div class="series-saved-chip">💾 Salvo na TV</div>` : '';
                 const posterUrl = getPosterUrl(m.poster);
                 const posterImg = posterUrl
                     ? `<img class="catalog-movie-poster" src="${escapeHtml(posterUrl)}" alt="" loading="lazy" onerror="this.onerror=null; this.outerHTML='<div class=\\'catalog-movie-poster\\'>🎬</div>';">`
@@ -4147,6 +4516,7 @@
                     <div class="catalog-movie-card" tabindex="0" role="button" aria-label="Ver filme ${title}" onclick="openMovieModal(${idx})">
                         ${posterImg}
                         ${ratingBadge}
+                        ${savedBadge}
                         <div class="catalog-movie-title">${title}</div>
                         <div class="catalog-movie-year">${year}</div>
                     </div>
@@ -4366,6 +4736,10 @@
                 const ratingBadge = getRatingBadgeHtml(s.rating);
                 const sIdStr = String(s.id);
                 const isFav = seriesFavoritesSet.has(sIdStr);
+                const savedCount = countSavedEpisodesForSeries(s);
+                const savedBadge = (savedCount > 0)
+                    ? `<div class="series-saved-chip">💾 ${savedCount} salvo${savedCount > 1 ? 's' : ''} na TV</div>`
+                    : '';
                 const posterUrl = getPosterUrl(s.poster);
                 const posterImg = posterUrl
                     ? `<img class="catalog-movie-poster" src="${escapeHtml(posterUrl)}" alt="" loading="lazy" onerror="this.onerror=null; this.outerHTML='<div class=\\'catalog-movie-poster\\'>🍿</div>';">`
@@ -4375,6 +4749,7 @@
                     <div class="catalog-movie-card" tabindex="0" role="button" aria-label="Ver série ${title}" onclick="openSeriesModal(${idx})">
                         ${posterImg}
                         ${ratingBadge}
+                        ${savedBadge}
                         <button class="channel-fav-btn series-fav-star ${isFav ? 'is-fav' : ''}" 
                                 title="Favoritar Série" 
                                 aria-label="${isFav ? 'Remover série dos favoritos' : 'Adicionar série aos favoritos'}"
@@ -4523,6 +4898,8 @@
                 return;
             }
 
+            const seriesName = currentSeriesDetails.name || 'Série';
+
             let html = '';
             season.episodes.forEach((ep, epIdx) => {
                 const epTitle = escapeHtml(ep.title || `Episódio ${ep.episode_num || epIdx + 1}`);
@@ -4530,8 +4907,45 @@
                 let epDur = (ep.duration && ep.duration !== '00:00:00' && ep.duration !== '0') ? ep.duration : 'HD';
                 if (typeof epDur === 'string' && epDur.startsWith('00:')) epDur = epDur.substring(3);
 
+                const task = findTaskForEpisode(ep);
+                let cardClass = 'episode-card';
+                let actionsHtml = '';
+
+                if (task && task.status === 'ready') {
+                    cardClass += ' is-ready';
+                    const safeTaskId = escapeHtml(task.id);
+                    actionsHtml = `
+                        <button type="button" class="btn-ep-ready-play" onclick="event.stopPropagation(); playSavedEpisode('${safeTaskId}')" title="Assistir direto da memória da TV">
+                            <span>✅ NA TV (▶ Assistir)</span>
+                        </button>
+                        <button type="button" class="btn-ep-ready-del" onclick="event.stopPropagation(); deleteEpisodeVodFromModal('${safeTaskId}', '${seasonNum}')" title="Remover da TV">
+                            <span>🗑️</span>
+                        </button>
+                    `;
+                } else if (task && ['processing', 'queued', 'pending', 'downloading', 'converting'].includes(task.status)) {
+                    cardClass += ' is-downloading';
+                    const prog = Math.round(task.progress || 0);
+                    actionsHtml = `
+                        <button type="button" class="btn-ep-downloading" disabled>
+                            <span>⏳ Baixando (${prog}%)</span>
+                        </button>
+                        <button type="button" class="btn-ep-play-senior" onclick="event.stopPropagation(); playEpisode('${seasonNum}', ${epIdx})" title="Assistir agora na TV via internet" aria-label="Assistir episódio agora na TV">
+                            <span>▶</span>
+                        </button>
+                    `;
+                } else {
+                    actionsHtml = `
+                        <button type="button" class="btn-ep-save-senior" onclick="event.stopPropagation(); saveEpisodeVod('${seasonNum}', ${epIdx})" title="Salvar na TV para assistir sem travar">
+                            <span>📥 Baixar para a TV</span>
+                        </button>
+                        <button type="button" class="btn-ep-play-senior" onclick="event.stopPropagation(); playEpisode('${seasonNum}', ${epIdx})" title="Assistir agora na TV" aria-label="Assistir episódio agora na TV">
+                            <span>▶</span>
+                        </button>
+                    `;
+                }
+
                 html += `
-                    <div class="episode-card">
+                    <div class="${cardClass}">
                         <div class="episode-main-info">
                             <div class="episode-badge">${epNumBadge}</div>
                             <div class="episode-title-group">
@@ -4540,17 +4954,39 @@
                             </div>
                         </div>
                         <div class="episode-actions-row">
-                            <button type="button" class="btn-ep-save-senior" onclick="event.stopPropagation(); saveEpisodeVod('${seasonNum}', ${epIdx})">
-                                <span>📥 Salvar Episódio</span>
-                            </button>
-                            <button type="button" class="btn-ep-play-senior" onclick="event.stopPropagation(); playEpisode('${seasonNum}', ${epIdx})" title="Assistir agora na TV" aria-label="Assistir episódio agora na TV">
-                                <span>▶</span>
-                            </button>
+                            ${actionsHtml}
                         </div>
                     </div>
                 `;
             });
             epList.innerHTML = html;
+        }
+
+        function playSavedEpisode(taskId) {
+            triggerHaptic();
+            closeSeriesModal();
+            playVodTask(taskId);
+        }
+
+        async function deleteEpisodeVodFromModal(taskId, seasonNum) {
+            triggerHaptic();
+            const task = vodTasks ? vodTasks.find(t => String(t.id) === String(taskId)) : null;
+            const displayTitle = task ? (task.title || task.display_name) : 'Episódio';
+            if (!confirm(`Deseja remover "${displayTitle}" da TV para liberar espaço?`)) return;
+            const pin = getAuthPin();
+
+            try {
+                await fetch('/api/vod/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Auth-PIN': pin },
+                    body: JSON.stringify({ task_id: taskId, pin: pin })
+                });
+                showActionBanner(`✓ Episódio removido da TV.`, 'info');
+                await pollVodStatus();
+                renderEpisodesForSeason(seasonNum);
+            } catch (err) {
+                showActionBanner(`Erro ao remover episódio.`, 'warn');
+            }
         }
 
         async function playEpisode(seasonNum, epIdx) {
@@ -4596,28 +5032,52 @@
             const seriesCover = currentSeriesDetails.cover || '';
             const epTitle = ep.title || `Episódio ${ep.episode_num || epIdx + 1}`;
             const fullName = `${seriesName} - ${epTitle}`;
+            const sId = currentSeriesDetails.id || (selectedSeries ? selectedSeries.id : null);
 
-            closeSeriesModal();
             triggerHaptic();
             requestNotificationPermission();
             const pin = getAuthPin();
 
-            showActionBanner(`Baixando <strong>${escapeHtml(fullName)}</strong> para o Cinema da TV...`);
+            showActionBanner(`Baixando <strong>${escapeHtml(fullName)}</strong> para a TV...`);
+
+            // Atualização otimista: insere na lista local para feedback visual instantâneo!
+            if (!vodTasks) vodTasks = [];
+            const tempTask = {
+                id: 'temp_' + Date.now(),
+                url: ep.url,
+                title: fullName,
+                poster: seriesCover,
+                series_id: sId ? String(sId) : null,
+                status: 'queued',
+                progress: 0,
+                status_msg: 'Iniciando download...'
+            };
+            vodTasks.unshift(tempTask);
+            renderEpisodesForSeason(seasonNum);
 
             try {
-                await fetch('/api/vod/prepare', {
+                const res = await fetch('/api/vod/prepare', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-Auth-PIN': pin },
                     body: JSON.stringify({
                         url: ep.url,
                         title: fullName,
                         poster: seriesCover,
+                        series_id: sId ? String(sId) : null,
                         pin: pin
                     })
                 });
-                showActionBanner(`✓ Episódio adicionado à fila do Cinema!`, 'success');
+                const data = await res.json();
+                if (data.task_id) {
+                    tempTask.id = data.task_id;
+                }
+                showActionBanner(`✓ <strong>${escapeHtml(fullName)}</strong> adicionado à fila da TV!`, 'success');
                 pollVodStatus();
-            } catch (err) {}
+            } catch (err) {
+                vodTasks = vodTasks.filter(t => t !== tempTask);
+                renderEpisodesForSeason(seasonNum);
+                showActionBanner(`Erro ao iniciar download do episódio.`, 'warn');
+            }
         }
 
         function closeSeriesModal() {
@@ -4946,6 +5406,10 @@
         }
 
         function scrollToCatalogTop() {
+            if (currentAppMode === 'saved') {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                return;
+            }
             let el = null;
             if (currentAppMode === 'cinema') {
                 el = document.getElementById('movie-categories');
@@ -4966,6 +5430,16 @@
             const prevBtn = document.getElementById('btn-remote-prev-page');
             const nextBtn = document.getElementById('btn-remote-next-page');
             if (!prevBtn || !nextBtn) return;
+
+            if (currentAppMode === 'saved') {
+                prevBtn.disabled = true;
+                prevBtn.style.opacity = '0.35';
+                prevBtn.style.pointerEvents = 'none';
+                nextBtn.disabled = true;
+                nextBtn.style.opacity = '0.35';
+                nextBtn.style.pointerEvents = 'none';
+                return;
+            }
 
             let curPage = livePage;
             let totalP = liveTotalPages;
@@ -5352,7 +5826,7 @@
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v13') caches.delete(k);
+                        if (k !== 'controle-tv-v14') caches.delete(k);
                     });
                 }).catch(() => {});
             }

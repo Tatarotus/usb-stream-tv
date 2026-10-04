@@ -2904,7 +2904,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if not sw:
             sw = """// Service Worker para PWA do Controle Remoto
-const CACHE_NAME = 'controle-tv-v13';
+const CACHE_NAME = 'controle-tv-v14';
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
@@ -4144,6 +4144,7 @@ self.addEventListener('message', (event) => {
                 "title": title or "Vídeo VOD",
                 "display_name": "",
                 "poster": poster,
+                "series_id": str(params.get("series_id")) if params.get("series_id") else None,
                 "status": "queued",
                 "progress": 0,
                 "status_msg": "Na fila...",
@@ -9871,7 +9872,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v13') caches.delete(k);
+                        if (k !== 'controle-tv-v14') caches.delete(k);
                     });
                 }).catch(() => {});
             }

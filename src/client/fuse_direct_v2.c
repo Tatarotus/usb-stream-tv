@@ -75,24 +75,22 @@ static int g_local_fd = -1;
 #define VOD_MEDIA_SZ (16ULL * 1024 * 1024)  /* 16 MB Dedicated VOD Media Buffer */
 #define VOD_CHUNK_SZ (4ULL * 1024 * 1024)   /* 4 MB Chunk Fetch Size */
 
-/* 1. VOD Head Pinning Cache */
-static uint8_t vod_head_cache[VOD_HEAD_SZ];
-static size_t vod_head_len = 0;
-static int vod_head_fetched = 0;
-
 /* 2. Dedicated VOD Media Sliding Cache & Prefetch Double Buffers */
 static uint8_t vod_media_buf1[VOD_MEDIA_SZ];
 static uint8_t vod_media_buf2[VOD_MEDIA_SZ];
 static uint8_t *vod_media_cache = vod_media_buf1;
 static uint8_t *vod_prefetch_buf = vod_media_buf2;
 
+static int vod_media_fi = -1;
 static uint64_t vod_media_start = (uint64_t)-1;
 static size_t vod_media_len = 0;
 
+static int vod_prefetch_fi = -1;
 static uint64_t vod_prefetch_start = (uint64_t)-1;
 static size_t vod_prefetch_len = 0;
 static int vod_prefetch_ready = 0;        /* 1 if vod_prefetch_buf has valid data */
 static int vod_prefetch_in_progress = 0;  /* 1 if background thread is downloading */
+static int vod_prefetch_target_fi = -1;
 static uint64_t vod_prefetch_target = (uint64_t)-1; /* offset being fetched */
 
 static pthread_t vod_prefetch_tid;
@@ -107,10 +105,39 @@ static int vod_fg_sock = -1; /* Foreground FUSE thread socket (head cache & sync
 static int vod_bg_sock = -1; /* Background prefetch worker socket */
 static struct sockaddr_in vod_server_addr;
 static int vod_addr_resolved = 0;
-static uint64_t vod_head_failed_until = 0;
 static char g_vod_host[128] = "127.0.0.1";
 static int g_vod_port = 80;
 static char g_vod_path[256] = "/vod/movie.mp4";
+
+/* ---- Multi-File VOD Architecture ---- */
+#define MAX_VOD_FILES 16
+#define PER_FILE_HEAD_SZ (2ULL * 1024 * 1024) /* 2 MB pinned header per file */
+
+struct vod_file_entry {
+    uint32_t start_clus;
+    uint32_t end_clus;
+    uint64_t size;
+    char path[512];
+    uint8_t *head_cache;
+    size_t head_len;
+    int head_fetched;
+    uint64_t head_failed_until;
+};
+
+static struct vod_file_entry g_vod_files[MAX_VOD_FILES];
+static int g_num_vod_files = 0;
+
+static inline int find_vod_file_by_cluster(uint64_t clus, int *out_idx, uint64_t *out_foff) {
+    if (g_num_vod_files <= 0) return -1;
+    for (int i = 0; i < g_num_vod_files; i++) {
+        if (clus >= g_vod_files[i].start_clus && clus <= g_vod_files[i].end_clus) {
+            if (out_idx) *out_idx = i;
+            if (out_foff) *out_foff = (clus - (uint64_t)g_vod_files[i].start_clus) * (SPC * BPS);
+            return i;
+        }
+    }
+    return -1;
+}
 
 /* ---- ring buffer for Live TV ---- */
 #define RINGSZ (32ULL * 1024 * 1024)     /* ~90s @ 2.9Mbps */
@@ -172,6 +199,7 @@ static void load_template(const char *path) {
     if (fd < 0) { perror("open template"); exit(1); }
     uint8_t rec[516];
     ssize_t n;
+    g_num_vod_files = 0;
     while ((n = read(fd, rec, sizeof rec)) == (ssize_t)sizeof rec) {
         if (ntmpl >= MAXTMPL) { fprintf(stderr, "template too big\n"); exit(1); }
         uint32_t sec;
@@ -179,23 +207,36 @@ static void load_template(const char *path) {
         tmpl_sec[ntmpl] = sec;
         memcpy(tmpl_dat[ntmpl], rec + 4, 512);
 
-        /* Inspect root directory (cluster 2 / DATA_SEC) to extract file size dynamically */
-        if (sec == DATA_SEC) {
-            for (int off = 32; off <= 512 - 32; off += 32) {
+        /* Inspect root directory (cluster 2 / DATA_SEC .. DATA_SEC + SPC - 1) to extract file(s) */
+        if (sec >= DATA_SEC && sec < DATA_SEC + SPC) {
+            for (int off = 0; off <= 512 - 32; off += 32) {
+                uint8_t first_byte = rec[4 + off];
+                if (first_byte == 0x00) break;
+                if (first_byte == 0xE5) continue;
                 uint8_t attr = rec[4 + off + 11];
-                uint16_t lowclus = *(uint16_t *)(&rec[4 + off + 26]);
-                if (attr == 0x20 && lowclus == 3) {
-                    uint32_t sz = *(uint32_t *)(&rec[4 + off + 28]);
-                    if (sz > 0) {
-                        g_file_size = sz;
-                        g_nfileclus = (g_file_size + SPC * BPS - 1) / (SPC * BPS);
-                        g_lastclus = FILECLUS + g_nfileclus - 1;
-                        printf("[*] Template detectou arquivo: %llu bytes (%.2f MB, %llu clusters)\n",
-                               (unsigned long long)g_file_size,
-                               (double)g_file_size / (1024.0 * 1024.0),
-                               (unsigned long long)g_nfileclus);
-                    }
-                    break;
+                if (attr == 0x0F || (attr & 0x18) != 0) continue; /* Skip LFN, volume label, subdirs */
+
+                uint16_t highclus = *(uint16_t *)(&rec[4 + off + 20]);
+                uint16_t lowclus  = *(uint16_t *)(&rec[4 + off + 26]);
+                uint32_t start_clus = ((uint32_t)highclus << 16) | (uint32_t)lowclus;
+                uint32_t sz = *(uint32_t *)(&rec[4 + off + 28]);
+
+                if (start_clus >= 3 && sz > 0 && g_num_vod_files < MAX_VOD_FILES) {
+                    int fi = g_num_vod_files++;
+                    g_vod_files[fi].start_clus = start_clus;
+                    g_vod_files[fi].size = sz;
+                    uint64_t n_clus = ((uint64_t)sz + SPC * BPS - 1) / (SPC * BPS);
+                    g_vod_files[fi].end_clus = start_clus + (n_clus > 0 ? (uint32_t)(n_clus - 1) : 0);
+                    g_vod_files[fi].head_cache = NULL;
+                    g_vod_files[fi].head_len = 0;
+                    g_vod_files[fi].head_fetched = 0;
+                    g_vod_files[fi].head_failed_until = 0;
+                    g_vod_files[fi].path[0] = '\0';
+
+                    printf("[*] Template detectou arquivo %d: clus %u..%u, %llu bytes (%.2f MB)\n",
+                           fi, g_vod_files[fi].start_clus, g_vod_files[fi].end_clus,
+                           (unsigned long long)g_vod_files[fi].size,
+                           (double)g_vod_files[fi].size / (1024.0 * 1024.0));
                 }
             }
         }
@@ -203,7 +244,32 @@ static void load_template(const char *path) {
         ntmpl++;
     }
     close(fd);
-    printf("[*] template: %d sectors loaded\n", ntmpl);
+
+    if (g_num_vod_files > 0) {
+        g_file_size = g_vod_files[0].size;
+        g_nfileclus = (g_file_size + SPC * BPS - 1) / (SPC * BPS);
+        g_lastclus = g_vod_files[g_num_vod_files - 1].end_clus;
+    }
+    printf("[*] template: %d sectors loaded, %d files found\n", ntmpl, g_num_vod_files);
+}
+
+static void vod_setup_file_paths(void) {
+    if (g_num_vod_files <= 0) return;
+    char base_path[256];
+    snprintf(base_path, sizeof(base_path), "%s", g_vod_path);
+    char *last_slash = strrchr(base_path, '/');
+    if (last_slash) *(last_slash + 1) = '\0';
+    else snprintf(base_path, sizeof(base_path), "/vod/");
+
+    for (int i = 0; i < g_num_vod_files; i++) {
+        if (g_num_vod_files == 1) {
+            snprintf(g_vod_files[0].path, sizeof(g_vod_files[0].path), "%s", g_vod_path);
+        } else {
+            snprintf(g_vod_files[i].path, sizeof(g_vod_files[i].path), "%sfile_%d.mp4", base_path, i);
+        }
+        printf("[*] VOD File %d: %s (size: %llu bytes)\n",
+               i, g_vod_files[i].path, (unsigned long long)g_vod_files[i].size);
+    }
 }
 
 static const uint8_t *tmpl_lookup(uint64_t sec) {
@@ -318,11 +384,13 @@ static int vod_connect_sock(int *sock_ptr) {
 /* Fetch chunk [start_off .. start_off + chunk_sz - 1] via HTTP Range with Buffered Parser.
  * Uses isolated sock_ptr per thread. Reconnects with TCP_NODELAY if dropped.
  * Supports early abort via abort_flag. */
-static int vod_http_fetch_chunk(int *sock_ptr, uint8_t *dst, uint64_t start_off, size_t chunk_sz, size_t *out_len, volatile int *abort_flag) {
-    if (!sock_ptr || start_off >= g_file_size || chunk_sz == 0) return -1;
+static int vod_http_fetch_chunk(int *sock_ptr, const char *path, uint64_t file_size,
+                                uint8_t *dst, uint64_t start_off, size_t chunk_sz,
+                                size_t *out_len, volatile int *abort_flag) {
+    if (!sock_ptr || !path || file_size == 0 || start_off >= file_size || chunk_sz == 0) return -1;
 
-    if (start_off + chunk_sz > g_file_size) {
-        chunk_sz = (size_t)(g_file_size - start_off);
+    if (start_off + chunk_sz > file_size) {
+        chunk_sz = (size_t)(file_size - start_off);
     }
     uint64_t fetch_end = start_off + chunk_sz - 1;
 
@@ -349,7 +417,7 @@ static int vod_http_fetch_chunk(int *sock_ptr, uint8_t *dst, uint64_t start_off,
             "Range: bytes=%llu-%llu\r\n"
             "Connection: keep-alive\r\n"
             "User-Agent: USBStreamTV-VOD/2.0\r\n\r\n",
-            g_vod_path, g_vod_host,
+            path, g_vod_host,
             (unsigned long long)start_off,
             (unsigned long long)fetch_end);
 
@@ -457,28 +525,47 @@ static int vod_http_fetch_chunk(int *sock_ptr, uint8_t *dst, uint64_t start_off,
     return -1;
 }
 
-/* 1. VOD Head Pinning Cache Initialization */
-static int vod_init_head_cache(void) {
-    if (vod_head_fetched) return 0;
-    if (g_file_size == 0) return 0;
-    if (now_ms() < vod_head_failed_until) return -1;
+/* 1. VOD Head Pinning Cache Initialization (per-file) */
+static int vod_init_head_cache_file(int fi) {
+    if (fi < 0 || fi >= g_num_vod_files) return -1;
+    struct vod_file_entry *f = &g_vod_files[fi];
+    if (f->head_fetched) return 0;
+    if (f->size == 0 || f->path[0] == '\0') return 0;
+    if (now_ms() < f->head_failed_until) return -1;
 
-    size_t to_fetch = (g_file_size < VOD_HEAD_SZ) ? (size_t)g_file_size : (size_t)VOD_HEAD_SZ;
-    printf("[*] Preenchendo VOD Head Pinning Cache: 0 a %zu (%.2f MB)...\n",
-           to_fetch, (double)to_fetch / (1024.0 * 1024.0));
+    size_t max_head = (g_num_vod_files > 1) ? PER_FILE_HEAD_SZ : VOD_HEAD_SZ;
+    size_t to_fetch = (f->size < max_head) ? (size_t)f->size : max_head;
+    if (!f->head_cache) {
+        f->head_cache = (uint8_t *)malloc(max_head);
+        if (!f->head_cache) {
+            fprintf(stderr, "[!] Falha de memoria para head_cache do arquivo %d\n", fi);
+            return -1;
+        }
+    }
+
+    printf("[*] Preenchendo VOD Head Pinning Cache [file %d: %s]: 0 a %zu (%.2f MB)...\n",
+           fi, f->path, to_fetch, (double)to_fetch / (1024.0 * 1024.0));
     size_t fetched = 0;
     volatile int abort_flag = 0;
-    int res = vod_http_fetch_chunk(&vod_fg_sock, vod_head_cache, 0, to_fetch, &fetched, &abort_flag);
+    int res = vod_http_fetch_chunk(&vod_fg_sock, f->path, f->size, f->head_cache, 0, to_fetch, &fetched, &abort_flag);
     if (res == 0 && fetched > 0) {
-        vod_head_len = fetched;
-        vod_head_fetched = 1;
-        vod_head_failed_until = 0;
-        printf("[✓] VOD Head Pinning Cache pronto: %zu bytes em RAM (0 ms latency, 0 rede)\n", vod_head_len);
+        f->head_len = fetched;
+        f->head_fetched = 1;
+        f->head_failed_until = 0;
+        printf("[✓] VOD Head Pinning Cache pronto [file %d]: %zu bytes em RAM (0 ms latency, 0 rede)\n",
+               fi, f->head_len);
         return 0;
     }
-    vod_head_failed_until = now_ms() + 15000;
-    fprintf(stderr, "[!] Falha ao preencher VOD Head Pinning Cache (tentara novamente em 15s)\n");
+    f->head_failed_until = now_ms() + 15000;
+    fprintf(stderr, "[!] Falha ao preencher VOD Head Pinning Cache [file %d] (tentara novamente em 15s)\n", fi);
     return -1;
+}
+
+static int vod_init_head_cache(void) {
+    if (g_num_vod_files > 0) {
+        return vod_init_head_cache_file(0);
+    }
+    return 0;
 }
 
 /* 2. Asynchronous Look-Ahead Prefetch Worker Thread */
@@ -486,6 +573,7 @@ static void *vod_prefetch_worker(void *arg) {
     (void)arg;
     while (running) {
         uint64_t target = (uint64_t)-1;
+        int target_fi = -1;
 
         pthread_mutex_lock(&vod_mu);
         while (running && !vod_prefetch_requested) {
@@ -500,22 +588,29 @@ static void *vod_prefetch_worker(void *arg) {
         }
 
         target = vod_prefetch_target;
+        target_fi = vod_prefetch_target_fi;
         vod_prefetch_requested = 0;
         vod_prefetch_in_progress = 1;
         vod_prefetch_abort = 0;
         pthread_mutex_unlock(&vod_mu);
 
         size_t fetched = 0;
-        int res = vod_http_fetch_chunk(&vod_bg_sock, vod_prefetch_buf, target, VOD_CHUNK_SZ, &fetched, &vod_prefetch_abort);
+        int res = -1;
+        if (target_fi >= 0 && target_fi < g_num_vod_files) {
+            res = vod_http_fetch_chunk(&vod_bg_sock, g_vod_files[target_fi].path, g_vod_files[target_fi].size,
+                                      vod_prefetch_buf, target, VOD_CHUNK_SZ, &fetched, &vod_prefetch_abort);
+        }
 
         pthread_mutex_lock(&vod_mu);
         vod_prefetch_in_progress = 0;
         if (res == 0 && !vod_prefetch_abort && fetched > 0) {
+            vod_prefetch_fi = target_fi;
             vod_prefetch_start = target;
             vod_prefetch_len = fetched;
             vod_prefetch_ready = 1;
         } else {
             vod_prefetch_ready = 0;
+            vod_prefetch_fi = -1;
         }
         pthread_cond_broadcast(&vod_done_cv);
         pthread_mutex_unlock(&vod_mu);
@@ -528,30 +623,33 @@ static void *vod_prefetch_worker(void *arg) {
 }
 
 /* Serves a single slice of VOD media data from Dual-Cache + Prefetch architecture */
-static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint64_t deadline_ms) {
-    if (g_file_size == 0 || to_read == 0 || foff >= g_file_size) return 0;
+static size_t serve_vod_slice_file(int fi, uint8_t *dst, uint64_t foff, size_t to_read, uint64_t deadline_ms) {
+    if (fi < 0 || fi >= g_num_vod_files) return 0;
+    struct vod_file_entry *f = &g_vod_files[fi];
+    if (f->size == 0 || to_read == 0 || foff >= f->size) return 0;
     if (now_ms() >= deadline_ms) return 0;
-    if (foff + to_read > g_file_size) to_read = (size_t)(g_file_size - foff);
+    if (foff + to_read > f->size) to_read = (size_t)(f->size - foff);
 
     /* Ensure head cache is ready */
-    if (!vod_head_fetched) {
-        vod_init_head_cache();
+    if (!f->head_fetched) {
+        vod_init_head_cache_file(fi);
     }
 
-    /* 1. VOD Head Pinning Cache: Any read where foff < vod_head_len must be served
-     * immediately via memcpy from vod_head_cache (0 ms latency, 0 network requests, 0 eviction) */
-    if (foff < vod_head_len) {
-        size_t avail = vod_head_len - (size_t)foff;
+    /* 1. VOD Head Pinning Cache: Any read where foff < head_len must be served
+     * immediately via memcpy from head_cache (0 ms latency, 0 network requests, 0 eviction) */
+    if (foff < f->head_len && f->head_cache) {
+        size_t avail = f->head_len - (size_t)foff;
         size_t take = (to_read < avail) ? to_read : avail;
-        memcpy(dst, vod_head_cache + foff, take);
+        memcpy(dst, f->head_cache + foff, take);
 
         /* Head Cache Prefetch Bridging: trigger prefetch when near end of head cache */
-        if (foff >= vod_head_len * 3 / 4 && vod_head_len < g_file_size) {
+        if (foff >= f->head_len * 3 / 4 && f->head_len < f->size) {
             pthread_mutex_lock(&vod_mu);
-            uint64_t bridge_target = vod_head_len;
+            uint64_t bridge_target = f->head_len;
             if (!vod_prefetch_in_progress &&
-                !(vod_prefetch_ready && vod_prefetch_start == bridge_target) &&
-                !(vod_media_start == bridge_target && vod_media_len > 0)) {
+                !(vod_prefetch_ready && vod_prefetch_fi == fi && vod_prefetch_start == bridge_target) &&
+                !(vod_media_fi == fi && vod_media_start == bridge_target && vod_media_len > 0)) {
+                vod_prefetch_target_fi = fi;
                 vod_prefetch_target = bridge_target;
                 vod_prefetch_requested = 1;
                 pthread_cond_signal(&vod_prefetch_cv);
@@ -562,11 +660,11 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
         return take;
     }
 
-    /* 2. Dedicated VOD Media Sliding Cache & Prefetch for foff >= vod_head_len */
+    /* 2. Dedicated VOD Media Sliding Cache & Prefetch for foff >= head_len */
     pthread_mutex_lock(&vod_mu);
 
     /* Case A: HIT in vod_media_cache */
-    if (foff >= vod_media_start && foff < vod_media_start + vod_media_len) {
+    if (vod_media_fi == fi && foff >= vod_media_start && foff < vod_media_start + vod_media_len) {
         size_t avail = vod_media_len - (size_t)(foff - vod_media_start);
         size_t take = (to_read < avail) ? to_read : avail;
         memcpy(dst, vod_media_cache + (foff - vod_media_start), take);
@@ -574,9 +672,10 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
         /* Look-ahead prefetch trigger: when sequential playback reaches > 50% of the current chunk */
         if (foff >= vod_media_start + vod_media_len / 2) {
             uint64_t next_start = vod_media_start + vod_media_len;
-            if (next_start < g_file_size) {
-                if (!(vod_prefetch_ready && vod_prefetch_start == next_start) &&
-                    !(vod_prefetch_in_progress && vod_prefetch_target == next_start)) {
+            if (next_start < f->size) {
+                if (!(vod_prefetch_ready && vod_prefetch_fi == fi && vod_prefetch_start == next_start) &&
+                    !(vod_prefetch_in_progress && vod_prefetch_target_fi == fi && vod_prefetch_target == next_start)) {
+                    vod_prefetch_target_fi = fi;
                     vod_prefetch_target = next_start;
                     vod_prefetch_requested = 1;
                     pthread_cond_signal(&vod_prefetch_cv);
@@ -588,15 +687,17 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
     }
 
     /* Case B: HIT in vod_prefetch_buf (already finished downloading) -> Instant 0-wait SWAP */
-    if (vod_prefetch_ready && foff >= vod_prefetch_start && foff < vod_prefetch_start + vod_prefetch_len) {
+    if (vod_prefetch_ready && vod_prefetch_fi == fi && foff >= vod_prefetch_start && foff < vod_prefetch_start + vod_prefetch_len) {
         uint8_t *tmp = vod_media_cache;
         vod_media_cache = vod_prefetch_buf;
         vod_prefetch_buf = tmp;
 
+        vod_media_fi = fi;
         vod_media_start = vod_prefetch_start;
         vod_media_len = vod_prefetch_len;
 
         vod_prefetch_ready = 0;
+        vod_prefetch_fi = -1;
         vod_prefetch_start = (uint64_t)-1;
         vod_prefetch_len = 0;
 
@@ -606,8 +707,9 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
 
         if (foff >= vod_media_start + vod_media_len / 2) {
             uint64_t next_start = vod_media_start + vod_media_len;
-            if (next_start < g_file_size &&
-                !(vod_prefetch_in_progress && vod_prefetch_target == next_start)) {
+            if (next_start < f->size &&
+                !(vod_prefetch_in_progress && vod_prefetch_target_fi == fi && vod_prefetch_target == next_start)) {
+                vod_prefetch_target_fi = fi;
                 vod_prefetch_target = next_start;
                 vod_prefetch_requested = 1;
                 pthread_cond_signal(&vod_prefetch_cv);
@@ -618,7 +720,8 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
     }
 
     /* Case C: Currently downloading in background for this exact offset -> wait on condvar */
-    if (vod_prefetch_in_progress && foff >= vod_prefetch_target && foff < vod_prefetch_target + VOD_CHUNK_SZ) {
+    if (vod_prefetch_in_progress && vod_prefetch_target_fi == fi &&
+        foff >= vod_prefetch_target && foff < vod_prefetch_target + VOD_CHUNK_SZ) {
         while (vod_prefetch_in_progress && !vod_prefetch_abort && running) {
             uint64_t current_time = now_ms();
             if (current_time >= deadline_ms) break;
@@ -640,15 +743,18 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
                 break;
             }
         }
-        if (vod_prefetch_ready && foff >= vod_prefetch_start && foff < vod_prefetch_start + vod_prefetch_len) {
+        if (vod_prefetch_ready && vod_prefetch_fi == fi &&
+            foff >= vod_prefetch_start && foff < vod_prefetch_start + vod_prefetch_len) {
             uint8_t *tmp = vod_media_cache;
             vod_media_cache = vod_prefetch_buf;
             vod_prefetch_buf = tmp;
 
+            vod_media_fi = fi;
             vod_media_start = vod_prefetch_start;
             vod_media_len = vod_prefetch_len;
 
             vod_prefetch_ready = 0;
+            vod_prefetch_fi = -1;
             vod_prefetch_start = (uint64_t)-1;
             vod_prefetch_len = 0;
 
@@ -658,8 +764,9 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
 
             if (foff >= vod_media_start + vod_media_len / 2) {
                 uint64_t next_start = vod_media_start + vod_media_len;
-                if (next_start < g_file_size &&
-                    !(vod_prefetch_in_progress && vod_prefetch_target == next_start)) {
+                if (next_start < f->size &&
+                    !(vod_prefetch_in_progress && vod_prefetch_target_fi == fi && vod_prefetch_target == next_start)) {
+                    vod_prefetch_target_fi = fi;
                     vod_prefetch_target = next_start;
                     vod_prefetch_requested = 1;
                     pthread_cond_signal(&vod_prefetch_cv);
@@ -699,6 +806,7 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
         vod_prefetch_abort = 0;
     }
     vod_prefetch_ready = 0;
+    vod_prefetch_fi = -1;
     vod_prefetch_start = (uint64_t)-1;
     vod_prefetch_len = 0;
 
@@ -708,6 +816,7 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
     }
 
     /* Invalidate vod_media_cache before releasing lock during network I/O */
+    vod_media_fi = -1;
     vod_media_start = (uint64_t)-1;
     vod_media_len = 0;
 
@@ -715,11 +824,12 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
 
     size_t fetched = 0;
     volatile int dummy_abort = 0;
-    int res = vod_http_fetch_chunk(&vod_fg_sock, vod_media_cache, foff, VOD_CHUNK_SZ, &fetched, &dummy_abort);
+    int res = vod_http_fetch_chunk(&vod_fg_sock, f->path, f->size, vod_media_cache, foff, VOD_CHUNK_SZ, &fetched, &dummy_abort);
 
     pthread_mutex_lock(&vod_mu);
 
     if (res == 0 && fetched > 0) {
+        vod_media_fi = fi;
         vod_media_start = foff;
         vod_media_len = fetched;
 
@@ -729,7 +839,8 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
 
         if (foff >= vod_media_start + vod_media_len / 2) {
             uint64_t next_start = vod_media_start + vod_media_len;
-            if (next_start < g_file_size) {
+            if (next_start < f->size) {
+                vod_prefetch_target_fi = fi;
                 vod_prefetch_target = next_start;
                 vod_prefetch_requested = 1;
                 pthread_cond_signal(&vod_prefetch_cv);
@@ -744,7 +855,7 @@ static size_t serve_vod_slice(uint8_t *dst, uint64_t foff, size_t to_read, uint6
 }
 
 /* Serves arbitrary byte length of VOD media, chaining slices across head/media/chunks */
-static void serve_vod(uint8_t *dst, uint64_t foff, size_t to_serve, uint64_t deadline_ms) {
+static void serve_vod_file(int fi, uint8_t *dst, uint64_t foff, size_t to_serve, uint64_t deadline_ms) {
     size_t served_total = 0;
     while (served_total < to_serve) {
         if (now_ms() >= deadline_ms) {
@@ -752,7 +863,7 @@ static void serve_vod(uint8_t *dst, uint64_t foff, size_t to_serve, uint64_t dea
             break;
         }
         size_t chunk = to_serve - served_total;
-        size_t served = serve_vod_slice(dst + served_total, foff + served_total, chunk, deadline_ms);
+        size_t served = serve_vod_slice_file(fi, dst + served_total, foff + served_total, chunk, deadline_ms);
         if (served == 0) {
             memset(dst + served_total, 0, chunk);
             break;
@@ -913,9 +1024,10 @@ static void do_rebase(uint64_t cur_foff) {
 static void on_open(void) {
     pthread_mutex_lock(&mu);
     if (g_mode == MODE_VOD_HTTP) {
-        printf("[FUSE] on_open: modo VOD CLOUD (tamanho %llu bytes)\n", (unsigned long long)g_file_size);
+        printf("[FUSE] on_open: modo VOD CLOUD (%d arquivos, principal: %llu bytes)\n",
+               g_num_vod_files, (unsigned long long)g_file_size);
         base_valid = 1;
-        vod_head_failed_until = 0;
+        for (int i = 0; i < g_num_vod_files; i++) g_vod_files[i].head_failed_until = 0;
         pthread_mutex_unlock(&mu);
         vod_init_head_cache();
         return;
@@ -992,7 +1104,16 @@ static void serve_disk(uint8_t *dst, uint64_t disk, size_t n, uint64_t deadline_
                     uint32_t v;
                     if (cl < 2) v = (cl == 0) ? 0x0FFFFFF8 : 0x0FFFFFFF;
                     else if (cl == 2) v = 0x0FFFFFFF;
-                    else if (cl < g_lastclus) v = (uint32_t)(cl + 1);
+                    else if (g_num_vod_files > 0) {
+                        v = 0;
+                        for (int i = 0; i < g_num_vod_files; i++) {
+                            if (cl >= g_vod_files[i].start_clus && cl <= g_vod_files[i].end_clus) {
+                                if (cl == g_vod_files[i].end_clus) v = 0x0FFFFFFF;
+                                else v = (uint32_t)(cl + 1);
+                                break;
+                            }
+                        }
+                    } else if (cl < g_lastclus) v = (uint32_t)(cl + 1);
                     else if (cl == g_lastclus) v = 0x0FFFFFFF;
                     else v = 0;
                     e[k] = v;
@@ -1006,28 +1127,43 @@ static void serve_disk(uint8_t *dst, uint64_t disk, size_t n, uint64_t deadline_
         }
 
         uint64_t clus = 2 + (sec - DATA_SEC) / SPC;
-        if (clus >= FILECLUS && clus < FILECLUS + g_nfileclus) {
-            uint64_t foff = (clus - FILECLUS) * (SPC * BPS)
-                          + (sec - (DATA_SEC + (clus - 2) * SPC)) * BPS + sec_off;
 
-            /* ---- MODE_VOD_HTTP (Cloud VOD: Dual-Cache + Prefetch) ---- */
-            if (g_mode == MODE_VOD_HTTP) {
-                uint64_t file_data_end = FILE_SEC * BPS + g_nfileclus * (SPC * BPS);
+        /* ---- MODE_VOD_HTTP (Cloud VOD: Multi-File Dual-Cache + Prefetch) ---- */
+        if (g_mode == MODE_VOD_HTTP) {
+            int fi = -1;
+            uint64_t foff_base = 0;
+            fi = find_vod_file_by_cluster(clus, &fi, &foff_base);
+            if (fi >= 0) {
+                uint64_t foff = foff_base + (sec - (DATA_SEC + (clus - 2) * SPC)) * BPS + sec_off;
+                uint64_t file_data_end = (DATA_SEC + (g_vod_files[fi].end_clus - 2 + 1) * SPC) * BPS;
                 size_t max_file_span = n - done;
                 if (disk + done + max_file_span > file_data_end) {
                     max_file_span = (size_t)(file_data_end - (disk + done));
                 }
-                if (foff < g_file_size) {
+                if (foff < g_vod_files[fi].size) {
                     size_t to_read = max_file_span;
-                    if (foff + to_read > g_file_size) to_read = (size_t)(g_file_size - foff);
-                    serve_vod(dst + done, foff, to_read, deadline_ms);
-                    if (max_file_span > to_read) memset(dst + done + to_read, 0, max_file_span - to_read);
+                    if (foff + to_read > g_vod_files[fi].size) {
+                        to_read = (size_t)(g_vod_files[fi].size - foff);
+                    }
+                    serve_vod_file(fi, dst + done, foff, to_read, deadline_ms);
+                    if (max_file_span > to_read) {
+                        memset(dst + done + to_read, 0, max_file_span - to_read);
+                    }
                 } else {
                     memset(dst + done, 0, max_file_span);
                 }
                 done += max_file_span;
                 continue;
+            } else {
+                memset(dst + done, 0, c);
+                done += c;
+                continue;
             }
+        }
+
+        if (clus >= FILECLUS && clus < FILECLUS + g_nfileclus) {
+            uint64_t foff = (clus - FILECLUS) * (SPC * BPS)
+                          + (sec - (DATA_SEC + (clus - 2) * SPC)) * BPS + sec_off;
 
             /* ---- MODE_VOD_LOCAL ---- */
             if (g_mode == MODE_VOD_LOCAL) {
@@ -1198,6 +1334,7 @@ int main(int argc, char **argv) {
         if (vod_resolve_server() < 0) {
             fprintf(stderr, "[!] Erro ao resolver endereco do servidor VOD: %s\n", g_vod_host);
         }
+        vod_setup_file_paths();
     } else if (access(g_fifo, F_OK) == 0 && (strstr(g_fifo, ".mp4") || strstr(g_fifo, ".ts")) && !strstr(g_fifo, "pipe")) {
         struct stat st;
         if (stat(g_fifo, &st) == 0 && S_ISREG(st.st_mode)) {
@@ -1236,6 +1373,7 @@ int main(int argc, char **argv) {
         }
         vod_prefetch_thread_started = 1;
         printf("[✓] Thread de prefetch assíncrono inicializada com sucesso\n");
+        vod_init_head_cache();
     }
 
     static char in_buf[128 * 1024 + 4096];
@@ -1387,7 +1525,7 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "[FUSE_READ_VOD] total=%lluMB off=%llu sz=%u head_len=%zu media_start=%llu\n",
                         (unsigned long long)(total_read / (1024*1024)),
                         (unsigned long long)offset, size,
-                        vod_head_len, (unsigned long long)m_start);
+                        (g_num_vod_files > 0 ? g_vod_files[0].head_len : 0), (unsigned long long)m_start);
                 } else {
                     fprintf(stderr, "[FUSE_READ_LIVE] total=%lluMB off=%llu sz=%u S_write=%lluMB base=%llu\n",
                         (unsigned long long)(total_read / (1024*1024)),

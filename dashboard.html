@@ -5540,7 +5540,7 @@
                         url: ch.url,
                         name: ch.name,
                         pin: pin,
-                        is_eco: true
+                        is_eco: Boolean(ch.is_eco)
                     })
                 });
 
@@ -5785,10 +5785,13 @@
                     body: JSON.stringify({ pin: pin })
                 }).catch(() => {});
 
-                // Sintoniza canal padrão na grade ao vivo
+                // Sintoniza canal padrão apenas se não houver canal ativo ou ao retornar de VOD/YouTube
                 if (allChannels && allChannels.length > 0) {
-                    const defCh = allChannels.find(c => c.id === 'band-rio') || allChannels[0];
-                    playChannel(defCh);
+                    const isMediaMode = (activeNowPlayingState.type === 'vod' || activeNowPlayingState.type === 'series' || activeNowPlayingState.type === 'yt');
+                    if (isMediaMode || !currentActiveId) {
+                        const defCh = allChannels.find(c => c.id === currentActiveId) || allChannels.find(c => c.id === 'record-rio-fhd2') || allChannels[0];
+                        playChannel(defCh);
+                    }
                 }
 
                 await Promise.allSettled([vodLivePromise, reconnectPromise]);

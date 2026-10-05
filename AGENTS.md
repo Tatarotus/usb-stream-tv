@@ -50,12 +50,19 @@ Qualquer alteração no pipeline de vídeo (`server.py`), no driver FUSE (`fuse_
 - **Fatia Única por Quadro**: Nunca repassar transmissões IPTV multi-slice (2 ou mais fatias por frame) sem transcodificar para `slices=1`.
 
 ### 2.2. Motor FUSE NTFS (`src/ntfs/fuse_ntfs.c`)
-- **Condição de Re-ancoragem Estrita**:
-  Reaberturas e saltos de âncora **só podem ocorrer** em `foff == 0`. Leituras sequenciais subsequentes (`foff = 65536`, `131072`, etc.) durante a inicialização do reprodutor ConnectShare nunca devem ser tratadas como reabertura.
-- **Pacing Suave Clamped**:
-  Quando a margem de segurança for menor que 8 MiB, limitar a entrega de leitura a ~1.0 MB/s, com pausas (`usleep`) sempre clampeadas a $\le 50\text{ ms}$ e mutex `g_mu` destravado durante o sono.
-- **Isolamento de Sondagens**:
-  Leituras da TV em `foff >= 8MB` que excedam a área escrita em mais de 2 MB devem retornar pacotes MPEG-TS nulos (`PID 0x1FFF: 0x47, 0x1F, 0xFF, 0x10, 0xFF...`) imediatamente, sem alterar o estado do anel nem a âncora.
+- **Zero Throttle no Feeder de Rede**:
+  O ring buffer de 128 MB (`RINGSZ`) é circular e auto-recuperável. O `feeder_thread` **nunca deve sofrer estrangulamento artificial (`usleep`/lead limits)**; deve ler livremente do pipe de rede. Se o decodificador pausar, o writer simplesmente sobrescreve dados antigos. Se o leitor cair atrás de `ring_old`, a re-ancoragem para `live_target` (`g_s_write - LEADBACK`) ocorre de forma automática e transparente.
+- **Condição de Re-ancoragem e Debounce de Salto ($K \ge 3$)**:
+  Re-ancoragens ocorrem exclusivamente em:
+  1. Abertura inicial ou reinício explícito em `foff == 0` com delta temporal $> 1500\text{ ms}$.
+  2. Queda do leitor fora da janela do anel circular (`s0 < ring_old`).
+  3. Salto para frente ou retomada de bookmark confirmados: exige $K \ge 3$ blocos sequenciais consecutivos fora da cadeia ativa de reprodução (`g_probe_consecutive_count >= 3`). Probes transitórios (1 a 2 blocos) jamais alteram a âncora ativa.
+- **Isolamento Estrito de Probes e Imutabilidade de Cadeia**:
+  Leituras não-sequenciais em `foff >= 8MB` que excedam a área escrita em mais de 2 MB retornam pacotes MPEG-TS nulos (`PID 0x1FFF: 0x47, 0x1F, 0xFF, 0x10, 0xFF...`) imediatamente. **É terminantemente proibido atualizar `g_prev_Fend` no caminho de entrega de NULLs**, preservando a continuidade ininterrupta do stream ativo.
+- **Pacing Suave Clamped $\le 50\text{ ms}$**:
+  Todas as pausas de regulação de taxa (`usleep`) no caminho de leitura FUSE devem ser estritamente clampeadas a $\le 50\text{ ms}$ com mutex `g_mu` destravado durante o sono, prevenindo timeouts do barramento SCSI USB do chip MStar.
+- **Sincronismo de Borda Viva (Live Edge Lock)**:
+  Quando o leitor alcança a borda do escritor (`start >= g_s_write`), ele deve aguardar cooperativamente em `wait_step()` via `pthread_cond_broadcast(&g_cv)`, sincronizando a entrega com o clock de rede do FFmpeg sem inserção desnecessária de pacotes nulos.
 
 ### 2.3. Subsistema Anti-Cache Triple-Tier
 Qualquer reinicialização ou troca para Live TV deve garantir o acionamento dos 3 níveis anti-cache:

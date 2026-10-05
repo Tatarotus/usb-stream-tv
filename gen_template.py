@@ -2,13 +2,13 @@
 """gen_template.py — builds fat_template.bin for fuse_direct.
 Contains ONLY static metadata sectors (boot, FSInfo, root dir); all FAT
 sectors and file data are synthesized/served live by the daemon.
-Geometry MUST match fuse_direct.c constants:
+Geometry MUST match fuse_direct constants:
   reserved=32, fats=2, spf=8192, root cluster 2, file cluster 3, spc=8.
 
 Supports:
-- Default Live TV mode ('TV AO VIVO.ts', 1.8GB)
-- Custom VOD mode (arbitrary filename and filesize)
-- Module import: from gen_template import build_fat_template
+- Single-file mode: build_fat_template(file_name, file_size, out_path)
+- Multi-file playlist mode: build_fat_template_multi(files, out_path)
+  where files = [(name1, size1), (name2, size2), ...]
 """
 import os
 import re
@@ -27,34 +27,55 @@ DEFAULT_FILE_SIZE = 1800000000       # 1.8 GB
 TOTAL_CLUS = 1048576                 # 4.0 GB virtual disk
 
 def make_sfn(name):
-    """Generate a clean 11-byte 8.3 Short File Name and its components."""
+    """Generate a clean 11-byte 8.3 Short File Name."""
     base, ext = os.path.splitext(name)
-    ext = ext.lstrip('.').upper()
+    ext = ext.lstrip('.').upper()[:3]
     base_clean = re.sub(r'[^A-Z0-9]', '', base.upper())
+    if not base_clean:
+        base_clean = "FILE"
     if len(base_clean) > 6:
         base_sfn = base_clean[:6] + "~1"
     else:
         base_sfn = f"{base_clean:<8}"[:8]
-    ext_sfn = f"{ext[:3]:<3}"
+    ext_sfn = f"{ext:<3}"[:3]
     sfn_bytes = f"{base_sfn:<8}{ext_sfn}".encode('ascii')[:11]
     return sfn_bytes
 
-def build_fat_template(file_name="TV AO VIVO.ts", file_size=DEFAULT_FILE_SIZE, out_path="fat_template.bin"):
-    """
-    Builds a FAT32 template for the given filename and size.
-    Returns bytes of the template file.
-    """
-    file_size = int(file_size)
-    if file_size > 0xFFFFFFFF:
-        raise ValueError(f"File size {file_size} exceeds 32-bit FAT32 limit (4GB)")
+def make_unique_sfn(name, existing_sfns):
+    """Generate a unique 11-byte 8.3 Short File Name avoiding collisions in directory."""
+    base, ext = os.path.splitext(name)
+    ext = ext.lstrip('.').upper()[:3]
+    base_clean = re.sub(r'[^A-Z0-9]', '', base.upper())
+    if not base_clean:
+        base_clean = "FILE"
+    
+    seq = 1
+    while True:
+        if seq == 1 and len(base_clean) <= 8 and not any(c in base for c in " -_"):
+            candidate = f"{base_clean:<8}"[:8]
+        else:
+            seq_str = f"~{seq}"
+            max_base = 8 - len(seq_str)
+            candidate = (base_clean[:max_base] + seq_str)[:8]
+        
+        sfn_bytes = f"{candidate:<8}{ext:<3}".encode('ascii')[:11]
+        if sfn_bytes not in existing_sfns:
+            existing_sfns.add(sfn_bytes)
+            return sfn_bytes
+        seq += 1
 
-    n_file_clus = (file_size + SPC * BPS - 1) // (SPC * BPS)
-    total_sec = DATA_SEC + (TOTAL_CLUS - 2) * SPC
-    free_clus = (TOTAL_CLUS - 2) - 1 - n_file_clus
-
-    short_sfn = make_sfn(file_name)
+def build_fat_template_multi(files, out_path="fat_template.bin", volume_label="LIVETV"):
+    """
+    Builds a FAT32 template for multiple files (e.g. series episodes).
+    files: list of (file_name, file_size) tuples
+    Returns: (bytes of template, list of layout dicts)
+    """
+    if not files:
+        files = [("TV AO VIVO.ts", DEFAULT_FILE_SIZE)]
+        
     out = {}
-
+    total_sec = DATA_SEC + (TOTAL_CLUS - 2) * SPC
+    
     # 1. Sector 0: Boot Sector
     boot = bytearray(512)
     boot[0:3] = b'\xEB\x58\x90'
@@ -63,107 +84,135 @@ def build_fat_template(file_name="TV AO VIVO.ts", file_size=DEFAULT_FILE_SIZE, o
     boot[13] = SPC
     struct.pack_into('<H', boot, 14, RSV)
     boot[16] = FATS
-    struct.pack_into('<H', boot, 17, 0)
-    struct.pack_into('<H', boot, 19, 0)
     boot[21] = 0xF8
-    struct.pack_into('<H', boot, 22, 0)
     struct.pack_into('<H', boot, 24, 63)
     struct.pack_into('<H', boot, 26, 255)
-    struct.pack_into('<I', boot, 28, 0)
     struct.pack_into('<I', boot, 32, total_sec)
     struct.pack_into('<I', boot, 36, SPF)
-    struct.pack_into('<H', boot, 40, 0)
-    struct.pack_into('<H', boot, 42, 0)
     struct.pack_into('<I', boot, 44, 2)  # root cluster
     struct.pack_into('<H', boot, 48, 1)  # fsinfo sector
     struct.pack_into('<H', boot, 50, 6)  # backup boot sector
     boot[64] = 0x80
     boot[66] = 0x29
     struct.pack_into('<I', boot, 67, 0x12345678)
-    boot[71:82] = b'LIVETV     '
+    boot[71:82] = f"{volume_label:<11}".encode('ascii')[:11]
     boot[82:90] = b'FAT32   '
     boot[510] = 0x55
     boot[511] = 0xAA
     out[0] = bytes(boot)
-
-    # 2. Sector 1: FSInfo Sector
+    out[6] = bytes(boot)
+    
+    # 2. Layout files
+    existing_sfns = set()
+    file_layouts = []
+    cur_clus = 3
+    for name, sz in files:
+        sz = int(sz)
+        if sz > 0xFFFFFFFF:
+            raise ValueError(f"File size {sz} for '{name}' exceeds 32-bit FAT32 limit (4GB)")
+        n_clus = (sz + SPC * BPS - 1) // (SPC * BPS)
+        sfn = make_unique_sfn(name, existing_sfns)
+        file_layouts.append({
+            "name": name,
+            "size": sz,
+            "sfn": sfn,
+            "start_clus": cur_clus,
+            "end_clus": cur_clus + n_clus - 1 if n_clus > 0 else cur_clus,
+            "n_clus": n_clus
+        })
+        cur_clus += n_clus
+        
+    total_file_clus = cur_clus - 3
+    if total_file_clus > (TOTAL_CLUS - 2):
+        raise ValueError(f"Total size of all files ({total_file_clus * 4096} bytes) exceeds 4GB volume")
+        
+    free_clus = (TOTAL_CLUS - 2) - 1 - total_file_clus
+    
+    # 3. Sector 1: FSInfo Sector
     fsinfo = bytearray(512)
     fsinfo[0:4] = b'RRaA'
     fsinfo[484:488] = b'rrAa'
     struct.pack_into('<I', fsinfo, 488, max(0, free_clus))
-    struct.pack_into('<I', fsinfo, 492, 3 + n_file_clus)
+    struct.pack_into('<I', fsinfo, 492, cur_clus)
     fsinfo[508:512] = b'\x00\x00\x55\xAA'
     out[1] = bytes(fsinfo)
-
-    # 3. Sector 6: Backup Boot Sector
-    out[6] = bytes(boot)
-
+    
     # 4. Cluster 2: Root Directory Sectors (DATA_SEC .. DATA_SEC + SPC - 1)
     root = bytearray(SPC * BPS)
-    
-    # Volume Label Entry (0x08)
     vol = bytearray(32)
-    vol[0:11] = b'LIVETV     '
+    vol[0:11] = f"{volume_label:<11}".encode('ascii')[:11]
     vol[11] = 0x08
     root[0:32] = vol
-
-    # Calculate LFN Checksum
-    chksum = 0
-    for byte in short_sfn:
-        chksum = (((chksum & 1) << 7) | ((chksum & 0xfe) >> 1)) + byte
-        chksum &= 0xff
-
-    # Prepare UTF-16LE LFN entries
-    lfn = list(file_name) + ['\x00']
-    while len(lfn) % 13:
-        lfn.append('\xff')
-    n_lfn = len(lfn) // 13
-
+    
     off = 32
-    for seq in range(n_lfn, 0, -1):
-        e = bytearray(32)
-        sb = seq | (0x40 if seq == n_lfn else 0)
-        e[0] = sb
-        chunk_chars = lfn[(seq - 1) * 13:seq * 13]
-        cb = ''.join(chunk_chars).encode('utf-16le')
-        e[1:11] = cb[0:10]
-        e[11] = 0x0F  # LFN attribute
-        e[12] = 0x00
-        e[13] = chksum
-        e[14:26] = cb[10:22]
-        e[26:28] = b'\x00\x00'
-        e[28:32] = cb[22:26]
-        root[off:off + 32] = e
+    for f in file_layouts:
+        short_sfn = f["sfn"]
+        name = f["name"]
+        sz = f["size"]
+        start_clus = f["start_clus"]
+        
+        # Calculate LFN Checksum
+        chksum = 0
+        for byte in short_sfn:
+            chksum = (((chksum & 1) << 7) | ((chksum & 0xfe) >> 1)) + byte
+            chksum &= 0xff
+            
+        lfn = list(name) + ['\x00']
+        while len(lfn) % 13:
+            lfn.append('\xff')
+        n_lfn = len(lfn) // 13
+        
+        entries_needed = n_lfn + 1
+        if off + entries_needed * 32 > len(root):
+            raise ValueError(f"Root directory overflow: cannot fit {name} in Cluster 2")
+            
+        for seq in range(n_lfn, 0, -1):
+            e = bytearray(32)
+            sb = seq | (0x40 if seq == n_lfn else 0)
+            e[0] = sb
+            chunk_chars = lfn[(seq - 1) * 13:seq * 13]
+            cb = ''.join(chunk_chars).encode('utf-16le')
+            e[1:11] = cb[0:10]
+            e[11] = 0x0F  # LFN attribute
+            e[12] = 0x00
+            e[13] = chksum
+            e[14:26] = cb[10:22]
+            e[26:28] = b'\x00\x00'
+            e[28:32] = cb[22:26]
+            root[off:off + 32] = e
+            off += 32
+            
+        sfn = bytearray(32)
+        sfn[0:11] = short_sfn
+        sfn[11] = 0x20  # Archive
+        struct.pack_into('<H', sfn, 14, 0x6000)  # create time
+        struct.pack_into('<H', sfn, 16, 0x524F)  # create date
+        struct.pack_into('<H', sfn, 18, 0x524F)  # access date
+        struct.pack_into('<H', sfn, 20, (start_clus >> 16) & 0xFFFF)
+        struct.pack_into('<H', sfn, 22, 0x6000)  # modify time
+        struct.pack_into('<H', sfn, 24, 0x524F)  # modify date
+        struct.pack_into('<H', sfn, 26, start_clus & 0xFFFF)
+        struct.pack_into('<I', sfn, 28, sz)
+        root[off:off + 32] = sfn
         off += 32
-
-    # 8.3 SFN Entry (0x20)
-    sfn = bytearray(32)
-    sfn[0:11] = short_sfn
-    sfn[11] = 0x20  # Archive
-    struct.pack_into('<H', sfn, 14, 0x6000)  # create time
-    struct.pack_into('<H', sfn, 16, 0x524F)  # create date
-    struct.pack_into('<H', sfn, 18, 0x524F)  # access date
-    struct.pack_into('<H', sfn, 20, 0)       # high cluster
-    struct.pack_into('<H', sfn, 22, 0x6000)  # modify time
-    struct.pack_into('<H', sfn, 24, 0x524F)  # modify date
-    struct.pack_into('<H', sfn, 26, 3)       # low cluster = 3
-    struct.pack_into('<I', sfn, 28, file_size)
-    root[off:off + 32] = sfn
-
+        
     for i in range(DATA_SEC, DATA_SEC + SPC):
         out[i] = bytes(root[(i - DATA_SEC) * BPS:(i - DATA_SEC + 1) * BPS])
-
-    # Serialize output
+        
     buf = bytearray()
     for sec in sorted(out):
         assert len(out[sec]) == BPS, sec
         buf.extend(struct.pack('<I', sec) + out[sec])
-
+        
     if out_path:
-        with open(out_path, "wb") as f:
-            f.write(buf)
-
+        with open(out_path, "wb") as fp:
+            fp.write(buf)
+            
     return bytes(buf)
+
+def build_fat_template(file_name="TV AO VIVO.ts", file_size=DEFAULT_FILE_SIZE, out_path="fat_template.bin"):
+    """Backward compatible wrapper for single file template."""
+    return build_fat_template_multi([(file_name, file_size)], out_path=out_path)
 
 def main():
     parser = argparse.ArgumentParser(description="Build fat_template.bin for USB Stream TV")

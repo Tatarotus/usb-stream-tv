@@ -421,6 +421,16 @@
     "description": "RECORD TV RIO FHD¹",
     "is_eco": false
   },
+  "record-rio-fhd2": {
+    "id": "record-rio-fhd2",
+    "name": "Record Rio FHD2",
+    "quality": "1080p",
+    "category": "TV Aberta",
+    "url": "{XTREAM_UPSTREAM}/live/{XTREAM_USER}/{XTREAM_PASS}/214640.ts",
+    "logo": "https://i.postimg.cc/kXjLYpRD/RECORD-RJ-FHD.png",
+    "description": "RECORD TV RIO FHD²",
+    "is_eco": false
+  },
   "tv-brasil": {
     "id": "tv-brasil",
     "name": "TV Brasil",

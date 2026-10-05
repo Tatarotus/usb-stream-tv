@@ -106,7 +106,7 @@ case "$MODE" in
 
         # Iniciar FUSE no modo Live TV padrao
         mkdir -p "$MNT"
-        "$FUSE_BIN" "$MNT" "$FIFO" "$LIVE_TMPL" > "$LOG" 2>&1 &
+        /system/xbin/busybox setsid "$FUSE_BIN" "$MNT" "$FIFO" "$LIVE_TMPL" > "$LOG" 2>&1 &
         for i in 1 2 3 4 5 6 7 8 9 10; do
             [ -f "$BACKING_IMG" ] && break
             sleep 1
@@ -119,7 +119,7 @@ case "$MODE" in
         fi
 
         # Iniciar exatamente 1 stream_fetcher da Live TV
-        /system/xbin/stream_fetcher "$FIFO" tv.smre.run.place 80 > /data/local/tmp/ntfs_lab/stream_fetcher.log 2>&1 &
+        /system/xbin/busybox setsid /system/xbin/stream_fetcher "$FIFO" tv.smre.run.place 80 > /data/local/tmp/ntfs_lab/stream_fetcher.log 2>&1 &
 
         # Aguardar pre-buffering de seguranca (>= 10MB) antes de expor LUN para a TV
         echo "[*] Aguardando pre-buffering de seguranca (>= 10MB)..."

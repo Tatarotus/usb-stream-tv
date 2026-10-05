@@ -445,17 +445,37 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
      * Check if this read is a continuation of the active sequential playback.
      * Any distant non-sequential read (>= 8 MB) MUST return standard MPEG-TS NULL packets
      * immediately WITHOUT corrupting playback anchor or incrementing epoch! */
-    int is_seq_read = (g_prev_Fend == (uint64_t)-1 || foff == g_prev_Fend ||
-                       (foff > g_prev_Fend && foff - g_prev_Fend <= 8ULL * 1024 * 1024) ||
-                       (foff < g_prev_Fend && g_prev_Fend - foff <= 262144));
+    static uint64_t g_probe_seq_end = (uint64_t)-1;
+    static int g_probe_consecutive_count = 0;
+
+    int is_seq_read = (g_prev_Fend != (uint64_t)-1 &&
+                       (foff == g_prev_Fend ||
+                        (foff > g_prev_Fend && foff - g_prev_Fend <= 262144) ||
+                        (foff < g_prev_Fend && g_prev_Fend - foff <= 262144)));
+
+    /* Track consecutive reads at a new seek/jump location */
+    if (!is_seq_read) {
+        if (g_probe_seq_end != (uint64_t)-1 && foff == g_probe_seq_end) {
+            g_probe_consecutive_count++;
+            g_probe_seq_end = foff + c;
+        } else {
+            g_probe_consecutive_count = 1;
+            g_probe_seq_end = foff + c;
+        }
+    } else {
+        g_probe_consecutive_count = 0;
+        g_probe_seq_end = (uint64_t)-1;
+    }
+
+    int is_confirmed_jump = (!is_seq_read && g_probe_consecutive_count >= 3);
 
     uint64_t s_probe = foff_to_stream_pos(foff);
-    int is_future_probe = (s_probe >= g_s_write + 2ULL * 1024 * 1024);
+    int is_future_probe = (s_probe >= g_s_write + 2ULL * 1024 * 1024 && !is_seq_read);
     int is_behind_probe = (s_probe < ring_old && !is_seq_read);
 
-    if (g_base_valid && foff >= 8ULL * 1024 * 1024 && (is_future_probe || is_behind_probe)) {
+    if (g_base_valid && foff >= 8ULL * 1024 * 1024 && (is_future_probe || is_behind_probe) && !is_confirmed_jump) {
         fill_null(dst, c);
-        g_prev_Fend = foff + c;
+        /* DO NOT update g_prev_Fend here! Keep active playback chain intact */
         return;
     }
 
@@ -471,6 +491,11 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
             /* Out of ring buffer bounds during sequential streaming: must re-anchor */
             is_reopen = 1;
         }
+    } else if (is_confirmed_jump) {
+        /* Confirmed seek / bookmark jump (3+ consecutive blocks): re-anchor to live target */
+        is_reopen = 1;
+        g_probe_consecutive_count = 0;
+        g_probe_seq_end = (uint64_t)-1;
     }
 
     if (is_reopen) {
@@ -579,14 +604,12 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
                     uint64_t max_clamp_ms;
                     if (lead_margin < 4ULL * 1024 * 1024) {
                         target_rate_kbps = 480; /* ~3.8 Mbps: slower than 5.0 Mbps stream, forces margin expansion */
-                        max_clamp_ms = 260;
                     } else if (lead_margin < 8ULL * 1024 * 1024) {
                         target_rate_kbps = 600; /* ~4.8 Mbps: matches stream rate */
-                        max_clamp_ms = 210;
                     } else {
                         target_rate_kbps = 900; /* ~7.2 Mbps: gentle throttle */
-                        max_clamp_ms = 140;
                     }
+                    max_clamp_ms = 50; /* Strictly clamped to <= 50ms (AGENTS.md §2.2) */
                     uint64_t target_ms = (uint64_t)cc * 1000ULL / (target_rate_kbps * 1024ULL);
                     if (target_ms > elapsed_ms) {
                         uint64_t diff_ms = target_ms - elapsed_ms;
@@ -602,7 +625,7 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
         }
         if (start >= g_s_write) {
             uint64_t s_frag = foff_to_stream_pos(F);
-            if (s_frag >= g_s_write + 2ULL * 1024 * 1024) {
+            if (s_frag >= g_s_write + 2ULL * 1024 * 1024 && !is_seq_read) {
                 /* Distant probe into unwritten space: deliver NULLs without moving anchor */
                 fill_null(dst + fo, cc);
                 fo += cc;
@@ -615,12 +638,12 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
             }
             if (start >= g_s_write) {
                 /* Feeder starved: do NOT re-anchor backwards!
-                 * Deliver standard MPEG-TS NULL packets PACED at real-time rate (~600 KB/s, ~200ms per 128KB)
+                 * Deliver standard MPEG-TS NULL packets PACED at real-time rate (~600 KB/s, <= 50ms per clamp)
                  * so the TV maintains steady playback timeline and does not rush ahead into the future */
                 g_live_fill_null_count++;
                 fill_null(dst + fo, cc);
                 uint64_t pace_ms = (uint64_t)cc * 1000ULL / (600ULL * 1024ULL);
-                if (pace_ms > 200) pace_ms = 200;
+                if (pace_ms > 50) pace_ms = 50; /* Strictly clamped to <= 50ms (AGENTS.md §2.2) */
                 pthread_mutex_unlock(&g_mu);
                 usleep((useconds_t)(pace_ms * 1000ULL));
                 pthread_mutex_lock(&g_mu);
@@ -638,6 +661,8 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
     if (g_base_valid) {
         g_last_tv_stream_pos = foff_to_stream_pos(foff + c);
         g_prev_Fend = foff + c;
+        g_probe_consecutive_count = 0;
+        g_probe_seq_end = (uint64_t)-1;
     }
 }
 
@@ -1008,25 +1033,6 @@ static void *feeder_thread(void *arg) {
                 continue;
             }
 
-            /* Flow control: Prevent writer from overrunning 64MB ring buffer during active playback */
-            while (g_running) {
-                pthread_mutex_lock(&g_mu);
-                int need_throttle = 0;
-                if (g_have_data && g_base_valid && g_last_tv_stream_pos > 0 && g_playback_armed) {
-                    if (g_last_video_read_ms > 0 && now_ms() - g_last_video_read_ms <= 2000) {
-                        uint64_t lead = (g_s_write > g_last_tv_stream_pos) ? (g_s_write - g_last_tv_stream_pos) : 0;
-                        if (lead > FLOW_CONTROL_LIMIT) {
-                            need_throttle = 1;
-                        }
-                    }
-                }
-                pthread_mutex_unlock(&g_mu);
-                if (need_throttle) {
-                    usleep(50000);
-                } else {
-                    break;
-                }
-            }
 
             ssize_t n = read(fd, buf, sizeof(buf));
             if (n < 0 && errno == EINTR) continue;

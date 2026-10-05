@@ -40,7 +40,7 @@ HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", 8080))
 AUTH_PIN = os.environ.get("TV_PIN", "1233")
 STANDBY_TIMEOUT = float(os.environ.get("STANDBY_TIMEOUT", 90.0))
-XTREAM_UPSTREAM = os.environ.get("XTREAM_UPSTREAM", "http://studut.shop:80")
+XTREAM_UPSTREAM = os.environ.get("XTREAM_UPSTREAM", "")
 XTREAM_STREAM_RE = re.compile(r'^/(?:(live|movie|series)/)?([^/]+)/([^/]+)/(\d+)(?:\.([a-zA-Z0-9]+))?$')
 XTREAM_CACHE = {}
 XTREAM_CACHE_LOCK = threading.Lock()
@@ -315,6 +315,110 @@ def format_fat_media_name(raw_title, max_len=36):
         clean_short = smart_cut(clean, max_len)
         return (clean_short or "FILME") + ".mp4"
 
+def extract_series_key(title):
+    clean = (title or "").strip().replace("@", "").strip()
+    if not clean:
+        return ""
+    m = re.search(r"\bS(\d{1,2})\s*E(\d{1,3})\b", clean, re.IGNORECASE) or \
+        re.search(r"\b(\d{1,2})x(\d{1,3})\b", clean, re.IGNORECASE) or \
+        re.search(r"Temporada\s*(\d{1,2}).*?Epis[oó]dio\s*(\d{1,3})", clean, re.IGNORECASE) or \
+        re.search(r"\bT(\d{1,2})\s*E(\d{1,3})\b", clean, re.IGNORECASE) or \
+        re.search(r"\b(?:Epis[oó]dio|Ep\.?)\s*(\d{1,3})\b", clean, re.IGNORECASE)
+    if not m:
+        return ""
+    clean = re.sub(r"\bS\d{1,2}\s*E\d{1,3}\b", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\b\d{1,2}x\d{1,3}\b", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"Temporada\s*\d{1,2}.*?Epis[oó]dio\s*\d{1,3}", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\bT\d{1,2}\s*E\d{1,3}\b", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\b(?:Epis[oó]dio|Ep\.?)\s*\d{1,3}\b", "", clean, flags=re.IGNORECASE)
+    parts = [p.strip() for p in clean.split(" - ") if p.strip()]
+    if parts:
+        clean = parts[0]
+    return re.sub(r"[^a-zA-Z0-9]", "", clean.lower())
+
+def extract_episode_num(title):
+    raw = (title or "").strip()
+    m = re.search(r"\bS(\d{1,2})\s*E(\d{1,3})\b", raw, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) * 1000 + int(m.group(2))
+    m = re.search(r"\b(\d{1,2})x(\d{1,3})\b", raw, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) * 1000 + int(m.group(2))
+    m = re.search(r"Temporada\s*(\d{1,2}).*?Epis[oó]dio\s*(\d{1,3})", raw, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) * 1000 + int(m.group(2))
+    m = re.search(r"\bT(\d{1,2})\s*E(\d{1,3})\b", raw, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) * 1000 + int(m.group(2))
+    m = re.search(r"\b(?:Epis[oó]dio|Ep\.?)\s*(\d{1,3})\b", raw, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    return 0
+
+def get_series_playlist(task_id):
+    """
+    Retorna a lista de tarefas da mesma serie ordenadas por temporada e episodio.
+    Se nao for serie ou so tiver 1 episodio baixado, retorna apenas a tarefa atual.
+    O tamanho total acumulado dos episodios nao excede 3.8 GB (envelope FAT32).
+    """
+    with VOD_TASKS_LOCK:
+        task = VOD_TASKS.get(task_id)
+        if not task:
+            f_mp4 = os.path.join(VOD_DIR, f"{task_id}.mp4")
+            if os.path.exists(f_mp4):
+                return [{"id": task_id, "file_path": f_mp4, "status": "ready"}]
+            return []
+        
+        skey = extract_series_key(task.get("title") or "")
+        if not skey:
+            return [task]
+            
+        series_tasks = []
+        for tid, t in VOD_TASKS.items():
+            if t.get("status") == "ready":
+                fp = t.get("file_path") or os.path.join(VOD_DIR, f"{tid}.mp4")
+                if os.path.exists(fp):
+                    if extract_series_key(t.get("title") or "") == skey:
+                        series_tasks.append(t)
+                        
+        if len(series_tasks) <= 1:
+            return [task]
+            
+        series_tasks.sort(key=lambda x: extract_episode_num(x.get("title") or ""))
+        
+        MAX_PLAYLIST_BYTES = 3800000000
+        total_sz = 0
+        filtered = []
+        active_idx = 0
+        for idx, t in enumerate(series_tasks):
+            if t.get("id") == task_id:
+                active_idx = idx
+                break
+                
+        filtered.append(series_tasks[active_idx])
+        sz_act = series_tasks[active_idx].get("file_size") or (os.path.getsize(series_tasks[active_idx]["file_path"]) if os.path.exists(series_tasks[active_idx].get("file_path", "")) else 0)
+        total_sz += sz_act
+        
+        next_i = active_idx + 1
+        while next_i < len(series_tasks):
+            sz = series_tasks[next_i].get("file_size") or (os.path.getsize(series_tasks[next_i]["file_path"]) if os.path.exists(series_tasks[next_i].get("file_path", "")) else 0)
+            if total_sz + sz > MAX_PLAYLIST_BYTES or len(filtered) >= 8:
+                break
+            filtered.append(series_tasks[next_i])
+            total_sz += sz
+            next_i += 1
+            
+        prev_i = active_idx - 1
+        while prev_i >= 0:
+            sz = series_tasks[prev_i].get("file_size") or (os.path.getsize(series_tasks[prev_i]["file_path"]) if os.path.exists(series_tasks[prev_i].get("file_path", "")) else 0)
+            if total_sz + sz > MAX_PLAYLIST_BYTES or len(filtered) >= 8:
+                break
+            filtered.insert(0, series_tasks[prev_i])
+            total_sz += sz
+            prev_i -= 1
+            
+        return filtered
+
 def refresh_vod_templates():
     """Atualiza nomes amigáveis e templates FAT32 de todas as tarefas prontas em disco."""
     if not gen_template:
@@ -546,13 +650,12 @@ def is_channel_eco(name, url=""):
     A TV Samsung Plasma PL51F4000 (2013) suporta H.264 até 1080p@30fps SDR 8-bit.
     Canais em 4K, UHD, HEVC, H.265 ou 10-bit NÃO possuem decodificador por hardware na TV
     e exigem transcodificação obrigatória (libx264).
+    Para garantir conformidade com as restrições físicas do chip MStar (GOP=30 exato, repeat-headers=1, slices=1),
+    streams de IPTV remotos NUNCA devem assumir stream copy (-c:v copy) sem declaração explícita no JSON.
     """
     target = f"{name or ''} {url or ''}".lower()
     if any(term in target for term in NON_ECO_KEYWORDS):
         return False
-    if url in CHANNEL_CODEC_CACHE:
-        return CHANNEL_CODEC_CACHE[url]
-    # Se não está em cache e não foi explicitamente validado por ffprobe, não assumir eco cego
     return False
 
 def resolve_channel_url(url):
@@ -595,7 +698,7 @@ class ChannelManager:
                                     "url": resolve_channel_url(c.get("url_ts") or c.get("url_m3u8") or c.get("url")),
                                     "logo": c.get("logo", "📺"),
                                     "description": c.get("nome_original", ""),
-                                    "is_eco": is_channel_eco(c.get("nome"), c.get("url_ts") or c.get("url_m3u8") or c.get("url"))
+                                    "is_eco": bool(c.get("is_eco", False)) if "is_eco" in c else is_channel_eco(c.get("nome"), c.get("url_ts") or c.get("url_m3u8") or c.get("url"))
                                 }
                         elif isinstance(raw, dict):
                             for cid, c in raw.items():
@@ -1404,7 +1507,8 @@ def resolve_youtube(yt_url):
 
 def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_sec=0, is_eco=False):
     is_http = url.startswith("http://") or url.startswith("https://")
-    if is_http and ("/live/" in url or "studut.shop" in url) and url.lower().endswith(".m3u8"):
+    upstream_netloc = urllib.parse.urlparse(XTREAM_UPSTREAM).netloc if XTREAM_UPSTREAM else ""
+    if is_http and ("/live/" in url or (upstream_netloc and upstream_netloc in url)) and url.lower().endswith(".m3u8"):
         url = url[:-5] + ".ts"
     url_lower = url.lower()
     is_googlevideo = "googlevideo" in url_lower or (audio_url and "googlevideo" in audio_url.lower())
@@ -1430,7 +1534,7 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_
         cmd.append("-re")
 
     if is_http:
-        ua = "Mozilla/5.0" if ("studut.shop" in url or "m3u8" in url or is_googlevideo) else "IPTVSmartersPro"
+        ua = "Mozilla/5.0" if ((upstream_netloc and upstream_netloc in url) or "m3u8" in url or is_googlevideo) else "IPTVSmartersPro"
         cmd.extend(["-user_agent", ua])
 
         # Proxy residencial adicionado se use_proxy for explicitamente True (necessario para googlevideo quando assinado pelo proxy)
@@ -1540,7 +1644,7 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_
         "-sc_threshold", "0",
         "-profile:v", "main",
         "-level", "4.1",
-        "-x264-params", "repeat-headers=1:aq-mode=2:aq-strength=1.0",
+        "-x264-params", "repeat-headers=1:slices=1:aq-mode=2:aq-strength=1.0",
 
         # Normalização sonora: AC3 (Dolby Digital) a 48kHz (padrão nativo de TV Samsung)
         "-af", "aresample=async=1000:first_pts=0:min_hard_comp=0.100000",
@@ -2031,13 +2135,14 @@ class StreamHub:
                     print(f"[~] Já sintonizado em: {target_name}")
                     return
 
-                if is_eco is None:
-                    if ch and ch.get("is_eco") is not None:
-                        target_is_eco = bool(ch.get("is_eco"))
-                    else:
-                        target_is_eco = is_channel_eco(target_name, target_url)
-                else:
+                if ch and ch.get("is_eco") is False:
+                    target_is_eco = False
+                elif is_eco is not None:
                     target_is_eco = bool(is_eco)
+                elif ch and ch.get("is_eco") is not None:
+                    target_is_eco = bool(ch.get("is_eco"))
+                else:
+                    target_is_eco = is_channel_eco(target_name, target_url)
 
                 eco_desc = " [⚡ MODO ECONÔMICO: STREAM COPY -c:v copy (~2% CPU)]" if target_is_eco else " [🔥 MODO TRANSCODE: libx264]"
                 print(f"\n[⚡] INICIANDO SINTONIA MAKE-BEFORE-BREAK: {target_name} ({target_url}){eco_desc}")
@@ -4603,6 +4708,75 @@ self.addEventListener('message', (event) => {
         self.end_headers()
         self.wfile.write(res)
 
+    def stream_mp4_file(self, file_path):
+        if not file_path or not os.path.exists(file_path):
+            self.send_error(404, "Movie file not found")
+            return
+        file_size = os.path.getsize(file_path)
+        range_header = self.headers.get("Range")
+
+        if range_header:
+            m_suffix = re.match(r"bytes=-(\d+)", range_header.strip())
+            m = re.match(r"bytes=(\d+)-(\d*)", range_header.strip())
+            start = None
+            end = None
+            if m_suffix:
+                length = int(m_suffix.group(1))
+                if file_size == 0 or length <= 0:
+                    self.send_response(416, "Range Not Satisfiable")
+                    self.send_header("Content-Range", f"bytes */{file_size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                start = max(0, file_size - length)
+                end = file_size - 1
+            elif m:
+                start = int(m.group(1))
+                end = int(m.group(2)) if m.group(2) else file_size - 1
+                if end >= file_size:
+                    end = file_size - 1
+
+            if start is not None and end is not None:
+                if start > end or start >= file_size:
+                    self.send_response(416, "Range Not Satisfiable")
+                    self.send_header("Content-Range", f"bytes */{file_size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                content_len = end - start + 1
+                self.send_response(206, "Partial Content")
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                self.send_header("Content-Length", str(content_len))
+                self.send_header("Connection", "keep-alive")
+                self.send_header("Keep-Alive", "timeout=60, max=10000")
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                with open(file_path, "rb") as f:
+                    f.seek(start)
+                    rem = content_len
+                    while rem > 0:
+                        chunk = f.read(min(131072, rem))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        rem -= len(chunk)
+                return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Length", str(file_size))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(131072)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
     def handle_vod_stream(self, path):
         parts = [p for p in path.strip("/").split("/") if p]
         if len(parts) < 3:
@@ -4621,6 +4795,7 @@ self.addEventListener('message', (event) => {
             f_bin = os.path.join(VOD_DIR, f"{task_id}.bin")
             if os.path.exists(f_mp4):
                 task = {
+                    "id": task_id,
                     "file_path": f_mp4,
                     "template_path": f_bin,
                     "status": "ready"
@@ -4630,6 +4805,25 @@ self.addEventListener('message', (event) => {
                 return
 
         if filename == "template.bin":
+            playlist = get_series_playlist(task_id)
+            if len(playlist) > 1 and gen_template:
+                try:
+                    files_spec = []
+                    for p in playlist:
+                        fn = p.get("display_name") or format_fat_media_name(p.get("title") or "")
+                        sz = p.get("file_size") or (os.path.getsize(p["file_path"]) if os.path.exists(p.get("file_path", "")) else 1000000)
+                        files_spec.append((fn, sz))
+                    data = gen_template.build_fat_template_multi(files_spec)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                except Exception as e:
+                    print(f"[!] Erro ao gerar template multi: {e}")
+
             tmpl_path = task.get("template_path")
             if not tmpl_path or not os.path.exists(tmpl_path):
                 self.send_error(404, "Template not found")
@@ -4644,75 +4838,26 @@ self.addEventListener('message', (event) => {
             self.wfile.write(data)
             return
 
+        if filename.startswith("file_") and filename.endswith(".mp4"):
+            m_idx = re.match(r"^file_(\d+)\.mp4$", filename)
+            if m_idx:
+                file_idx = int(m_idx.group(1))
+                playlist = get_series_playlist(task_id)
+                if file_idx < len(playlist):
+                    target_task = playlist[file_idx]
+                    target_path = target_task.get("file_path")
+                    if target_path and os.path.exists(target_path):
+                        self.stream_mp4_file(target_path)
+                        return
+            self.send_error(404, "Episode not found")
+            return
+
         if filename in ("movie.mp4", "movie.ts"):
             file_path = task.get("file_path")
             if not file_path or not os.path.exists(file_path):
                 self.send_error(404, "Movie file not found")
                 return
-            file_size = os.path.getsize(file_path)
-            range_header = self.headers.get("Range")
-
-            if range_header:
-                m_suffix = re.match(r"bytes=-(\d+)", range_header.strip())
-                m = re.match(r"bytes=(\d+)-(\d*)", range_header.strip())
-                start = None
-                end = None
-                if m_suffix:
-                    length = int(m_suffix.group(1))
-                    if file_size == 0 or length <= 0:
-                        self.send_response(416, "Range Not Satisfiable")
-                        self.send_header("Content-Range", f"bytes */{file_size}")
-                        self.send_header("Content-Length", "0")
-                        self.end_headers()
-                        return
-                    start = max(0, file_size - length)
-                    end = file_size - 1
-                elif m:
-                    start = int(m.group(1))
-                    end = int(m.group(2)) if m.group(2) else file_size - 1
-                    if end >= file_size:
-                        end = file_size - 1
-
-                if start is not None and end is not None:
-                    if start > end or start >= file_size:
-                        self.send_response(416, "Range Not Satisfiable")
-                        self.send_header("Content-Range", f"bytes */{file_size}")
-                        self.send_header("Content-Length", "0")
-                        self.end_headers()
-                        return
-                    content_len = end - start + 1
-                    self.send_response(206, "Partial Content")
-                    self.send_header("Content-Type", "video/mp4")
-                    self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
-                    self.send_header("Content-Length", str(content_len))
-                    self.send_header("Connection", "keep-alive")
-                    self.send_header("Keep-Alive", "timeout=60, max=10000")
-                    self.send_header("Accept-Ranges", "bytes")
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                    self.end_headers()
-                    with open(file_path, "rb") as f:
-                        f.seek(start)
-                        rem = content_len
-                        while rem > 0:
-                            chunk = f.read(min(131072, rem))
-                            if not chunk:
-                                break
-                            self.wfile.write(chunk)
-                            rem -= len(chunk)
-                    return
-
-            self.send_response(200)
-            self.send_header("Content-Type", "video/mp4")
-            self.send_header("Content-Length", str(file_size))
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            with open(file_path, "rb") as f:
-                while True:
-                    chunk = f.read(131072)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
+            self.stream_mp4_file(file_path)
             return
 
         self.send_error(404, "Not Found")

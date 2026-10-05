@@ -446,9 +446,16 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
      * Any distant non-sequential read (>= 8 MB) MUST return standard MPEG-TS NULL packets
      * immediately WITHOUT corrupting playback anchor or incrementing epoch! */
     int is_seq_read = (g_prev_Fend == (uint64_t)-1 || foff == g_prev_Fend ||
-                       (foff > g_prev_Fend && foff - g_prev_Fend <= 262144));
-    if (g_base_valid && foff >= 8ULL * 1024 * 1024 && !is_seq_read) {
+                       (foff > g_prev_Fend && foff - g_prev_Fend <= 8ULL * 1024 * 1024) ||
+                       (foff < g_prev_Fend && g_prev_Fend - foff <= 262144));
+
+    uint64_t s_probe = foff_to_stream_pos(foff);
+    int is_future_probe = (s_probe >= g_s_write + 2ULL * 1024 * 1024);
+    int is_behind_probe = (s_probe < ring_old && !is_seq_read);
+
+    if (g_base_valid && foff >= 8ULL * 1024 * 1024 && (is_future_probe || is_behind_probe)) {
         fill_null(dst, c);
+        g_prev_Fend = foff + c;
         return;
     }
 
@@ -593,10 +600,10 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
                 s_last_pace_ms = now_ms();
             }
         }
-
         if (start >= g_s_write) {
-            if (!is_seq_read && F >= 8ULL * 1024 * 1024) {
-                /* Non-sequential probe into unwritten space: deliver NULLs without moving anchor */
+            uint64_t s_frag = foff_to_stream_pos(F);
+            if (s_frag >= g_s_write + 2ULL * 1024 * 1024) {
+                /* Distant probe into unwritten space: deliver NULLs without moving anchor */
                 fill_null(dst + fo, cc);
                 fo += cc;
                 continue;

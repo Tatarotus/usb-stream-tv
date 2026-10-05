@@ -1209,16 +1209,84 @@
             -webkit-box-orient: unset !important;
         }
         .vod-grid-ep-badge {
-            background: rgba(124, 58, 237, 0.9);
-            border: 1px solid #a78bfa;
+            background: #1e1b4b;
+            border: 2px solid #818cf8;
             color: #ffffff;
-            font-size: 11px;
+            font-size: 14px;
             font-weight: 800;
-            padding: 2px 7px;
-            border-radius: 6px;
-            margin-top: 3px;
+            padding: 4px 10px;
+            border-radius: 8px;
+            margin-top: 4px;
             width: fit-content;
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Badge Elegante de Episódio na Thumbnail das Séries Salvas */
+        .vod-thumb-ep-badge {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(15, 23, 42, 0.94);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 2.5px solid #818cf8;
+            border-radius: 12px;
+            padding: 4px 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.85);
+            z-index: 3;
+            pointer-events: none;
+            transition: all 0.2s ease;
+        }
+
+        .vod-grid-card.active .vod-thumb-ep-badge {
+            border-color: var(--green);
+            box-shadow: 0 0 16px rgba(34, 197, 94, 0.5);
+        }
+
+        .vod-thumb-ep-season {
+            font-size: 11px;
+            font-weight: 900;
+            color: #c7d2fe;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            line-height: 1.1;
+            margin-bottom: 2px;
+            white-space: nowrap;
+        }
+
+        .vod-thumb-ep-row {
+            display: flex;
+            align-items: baseline;
+            gap: 4px;
+            line-height: 1;
+        }
+
+        .vod-thumb-ep-prefix {
+            font-size: 13px;
+            font-weight: 900;
+            color: #a5b4fc;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .vod-grid-card.active .vod-thumb-ep-prefix {
+            color: var(--green);
+        }
+
+        .vod-thumb-ep-num {
+            font-size: 26px;
+            font-weight: 900;
+            color: #ffffff;
+            line-height: 1;
+            font-feature-settings: "tnum";
+            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
         }
         .vod-modal-details-grid {
             display: grid;
@@ -3884,11 +3952,11 @@
                 let rawTitle = (task.title || task.display_name || 'Vídeo').trim().replace(/^@\s*/, '');
                 const title = escapeHtml(rawTitle);
                 const safeId = escapeHtml(task.id);
-                const epInfo = extractSeasonEpisode(rawTitle);
-                const epBadge = epInfo ? `<div class="vod-grid-ep-badge">🏷️ ${escapeHtml(epInfo)}</div>` : '';
-
                 const isYt = isYtTask(task);
                 const isSeries = isSeriesTask(task);
+
+                const epInfo = extractSeasonEpisode(rawTitle);
+                const epBadge = (isSeries && epInfo) ? `<div class="vod-grid-ep-badge">🍿 ${escapeHtml(epInfo)}</div>` : '';
 
                 let badgeHtml = '';
                 if (isPlaying) {
@@ -3901,6 +3969,22 @@
                     badgeHtml = `<span class="vod-grid-badge">🎬 FILME</span>`;
                 }
 
+                let thumbEpBadgeHtml = '';
+                if (isSeries) {
+                    const epData = extractEpisodeBadgeData(task);
+                    if (epData) {
+                        thumbEpBadgeHtml = `
+                            <div class="vod-thumb-ep-badge" aria-label="${epData.seasonStr ? epData.seasonStr + ' ' : ''}Episódio ${epData.epStr}">
+                                ${epData.seasonStr ? `<div class="vod-thumb-ep-season">${escapeHtml(epData.seasonStr)}</div>` : ''}
+                                <div class="vod-thumb-ep-row">
+                                    <span class="vod-thumb-ep-prefix">EP</span>
+                                    <span class="vod-thumb-ep-num">${escapeHtml(epData.epStr)}</span>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+
                 const fallbackIcon = isSeries ? '🍿' : (isYt ? '▶️' : '🎬');
                 const posterImg = task.poster 
                     ? `<img class="vod-grid-poster-img" src="${escapeHtml(task.poster)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=\\'vod-grid-poster-fallback\\'>${fallbackIcon}</div>'">`
@@ -3911,6 +3995,7 @@
                         <div class="vod-grid-poster-wrap">
                             ${posterImg}
                             ${badgeHtml}
+                            ${thumbEpBadgeHtml}
                         </div>
                         <div class="vod-grid-body">
                             <div class="vod-grid-title" title="${title}">${title}</div>
@@ -3932,6 +4017,75 @@
         // Alias para compatibilidade legada
         function renderVodShelf() {
             renderSavedShelf();
+        }
+
+        // Extrator de dados de temporada e episódio para Badge Elegante na Thumbnail
+        function extractEpisodeBadgeData(task) {
+            if (!task) return null;
+            let raw = (task.title || task.display_name || '').trim().replace(/^@\s*/, '');
+            if (!raw) return null;
+
+            let season = null;
+            let ep = null;
+
+            // 1. S01E05 / S1E5 / s02e04
+            let m = raw.match(/\bS(\d{1,2})\s*E(\d{1,3})\b/i);
+            if (m) {
+                season = parseInt(m[1], 10);
+                ep = parseInt(m[2], 10);
+            }
+
+            // 2. 1x05 / 01x05
+            if (ep === null) {
+                m = raw.match(/\b(\d{1,2})x(\d{1,3})\b/i);
+                if (m) {
+                    season = parseInt(m[1], 10);
+                    ep = parseInt(m[2], 10);
+                }
+            }
+
+            // 3. Temporada 1 ... Episódio 5
+            if (ep === null) {
+                m = raw.match(/Temporada\s*(\d{1,2}).*?Epis[oó]dio\s*(\d{1,3})/i);
+                if (m) {
+                    season = parseInt(m[1], 10);
+                    ep = parseInt(m[2], 10);
+                }
+            }
+
+            // 4. T1E5 / T01E05
+            if (ep === null) {
+                m = raw.match(/\bT(\d{1,2})\s*E(\d{1,3})\b/i);
+                if (m) {
+                    season = parseInt(m[1], 10);
+                    ep = parseInt(m[2], 10);
+                }
+            }
+
+            // 5. Episódio 5 / Ep. 5
+            if (ep === null) {
+                m = raw.match(/\b(?:Epis[oó]dio|Ep\.?)\s*(\d{1,3})\b/i);
+                if (m) {
+                    ep = parseInt(m[1], 10);
+                }
+            }
+
+            // 6. Atributos da tarefa
+            if (ep === null && task.episode_num != null && task.episode_num !== '') {
+                ep = parseInt(task.episode_num, 10);
+                if (task.season_num != null && task.season_num !== '') {
+                    season = parseInt(task.season_num, 10);
+                }
+            }
+
+            if (ep === null) return null;
+
+            return {
+                season: season,
+                episode: ep,
+                seasonStr: season != null ? `TEMP. ${season}` : null,
+                epStr: String(ep).padStart(2, '0')
+            };
         }
 
         // Extrator inteligente de Temporada e Episódio
@@ -5889,7 +6043,7 @@
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v17') caches.delete(k);
+                        if (k !== 'controle-tv-v18') caches.delete(k);
                     });
                 }).catch(() => {});
             }

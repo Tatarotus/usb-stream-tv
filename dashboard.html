@@ -3955,9 +3955,6 @@
                 const isYt = isYtTask(task);
                 const isSeries = isSeriesTask(task);
 
-                const epInfo = extractSeasonEpisode(rawTitle);
-                const epBadge = (isSeries && epInfo) ? `<div class="vod-grid-ep-badge">🍿 ${escapeHtml(epInfo)}</div>` : '';
-
                 let badgeHtml = '';
                 if (isPlaying) {
                     badgeHtml = `<span class="vod-grid-badge live-active">● NO AR NA TV</span>`;
@@ -3999,7 +3996,6 @@
                         </div>
                         <div class="vod-grid-body">
                             <div class="vod-grid-title" title="${title}">${title}</div>
-                            ${epBadge}
                             <button class="btn-vod-grid-play" onclick="event.stopPropagation(); playVodTask('${safeId}')" aria-label="Assistir ${title} na TV">
                                 ▶️ ASSISTIR
                             </button>
@@ -6043,7 +6039,7 @@
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v18') caches.delete(k);
+                        if (k !== 'controle-tv-v19') caches.delete(k);
                     });
                 }).catch(() => {});
             }

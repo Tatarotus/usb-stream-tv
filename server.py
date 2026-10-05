@@ -223,6 +223,127 @@ try:
 except Exception:
     gen_template = None
 
+def smart_cut(text, max_chars):
+    text = (text or "").strip()
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    if " " in truncated:
+        last_space = truncated.rfind(" ")
+        if last_space >= 6:
+            return truncated[:last_space].strip()
+    return truncated.strip()
+
+def format_fat_media_name(raw_title, max_len=36):
+    """
+    Formata o nome do arquivo para exibição no ConnectShare/MediaPlay da TV Samsung.
+    Garante que séries incluam o nome e NUNCA cortem a temporada/episódio (ex: 'A Noiva de Istambul S01E10.mp4').
+    """
+    raw = (raw_title or "").strip().replace("@", "").strip()
+    if not raw:
+        return "FILME.mp4"
+    
+    # 1. Detectar Temporada e Episódio
+    season = None
+    episode = None
+    ep_str = None
+    
+    m = re.search(r"\bS(\d{1,2})\s*E(\d{1,3})\b", raw, re.IGNORECASE)
+    if m:
+        season = int(m.group(1))
+        episode = int(m.group(2))
+        ep_str = f"S{season:02d}E{episode:02d}"
+    
+    if not ep_str:
+        m = re.search(r"\b(\d{1,2})x(\d{1,3})\b", raw, re.IGNORECASE)
+        if m:
+            season = int(m.group(1))
+            episode = int(m.group(2))
+            ep_str = f"S{season:02d}E{episode:02d}"
+            
+    if not ep_str:
+        m = re.search(r"Temporada\s*(\d{1,2}).*?Epis[oó]dio\s*(\d{1,3})", raw, re.IGNORECASE)
+        if m:
+            season = int(m.group(1))
+            episode = int(m.group(2))
+            ep_str = f"S{season:02d}E{episode:02d}"
+            
+    if not ep_str:
+        m = re.search(r"\bT(\d{1,2})\s*E(\d{1,3})\b", raw, re.IGNORECASE)
+        if m:
+            season = int(m.group(1))
+            episode = int(m.group(2))
+            ep_str = f"S{season:02d}E{episode:02d}"
+            
+    if not ep_str:
+        m = re.search(r"\b(?:Epis[oó]dio|Ep\.?)\s*(\d{1,3})\b", raw, re.IGNORECASE)
+        if m:
+            episode = int(m.group(1))
+            ep_str = f"EP{episode:02d}"
+
+    if ep_str:
+        clean = raw
+        clean = re.sub(r"\bS\d{1,2}\s*E\d{1,3}\b", "", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"\b\d{1,2}x\d{1,3}\b", "", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"Temporada\s*\d{1,2}.*?Epis[oó]dio\s*\d{1,3}", "", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"\bT\d{1,2}\s*E\d{1,3}\b", "", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"\b(?:Epis[oó]dio|Ep\.?)\s*\d{1,3}\b", "", clean, flags=re.IGNORECASE)
+        
+        # Elimina repetições de nomes com hífen (ex: "Largados e Pelados - Largados e Pelados")
+        parts = [p.strip() for p in clean.split(" - ") if p.strip()]
+        if len(parts) >= 2:
+            p0 = re.sub(r"[^a-zA-Z0-9]", "", parts[0].lower())
+            p1 = re.sub(r"[^a-zA-Z0-9]", "", parts[1].lower())
+            if p0 and p1 and (p0 in p1 or p1 in p0):
+                clean = parts[0]
+            else:
+                clean = parts[0]
+        elif len(parts) == 1:
+            clean = parts[0]
+            
+        clean = re.sub(r"[^a-zA-Z0-9 _-]", "", clean).strip()
+        series_max = max(10, max_len - len(ep_str) - 5)
+        clean_short = smart_cut(clean, series_max)
+        clean_short = re.sub(r"\s+(?:com|de|da|do|para|e|em|a|o)\s*$", "", clean_short, flags=re.IGNORECASE).strip()
+        
+        return f"{clean_short} {ep_str}.mp4"
+    else:
+        # Filme ou outro vídeo
+        clean = re.sub(r"\s*-\s*Filme.*", "", raw, flags=re.IGNORECASE)
+        clean = re.sub(r"\|.*", "", clean)
+        clean = re.sub(r"[^a-zA-Z0-9 _-]", "", clean).strip()
+        clean_short = smart_cut(clean, max_len)
+        return (clean_short or "FILME") + ".mp4"
+
+def refresh_vod_templates():
+    """Atualiza nomes amigáveis e templates FAT32 de todas as tarefas prontas em disco."""
+    if not gen_template:
+        return
+    updated = False
+    with VOD_TASKS_LOCK:
+        for tid, task in list(VOD_TASKS.items()):
+            if task.get("status") == "ready":
+                out_file = task.get("file_path") or os.path.join(VOD_DIR, f"{tid}.mp4")
+                out_tmpl = task.get("template_path") or os.path.join(VOD_DIR, f"{tid}.bin")
+                if os.path.exists(out_file):
+                    raw_title = task.get("title") or task.get("display_name") or "Vídeo"
+                    new_fat_name = format_fat_media_name(raw_title)
+                    old_disp = task.get("display_name")
+                    if old_disp != new_fat_name or not os.path.exists(out_tmpl):
+                        task["display_name"] = new_fat_name
+                        task["template_path"] = out_tmpl
+                        try:
+                            fsize = min(os.path.getsize(out_file), 4294967000)
+                            gen_template.build_fat_template(file_name=new_fat_name, file_size=fsize, out_path=out_tmpl)
+                            print(f"[✓ TEMPLATE] Atualizado template FAT32 para {new_fat_name} ({tid})")
+                            updated = True
+                        except Exception as e:
+                            print(f"[!] Erro ao atualizar template {tid}: {e}")
+        if updated:
+            save_vod_tasks()
+
+refresh_vod_templates()
+
 FAVORITES_FILE = os.path.join(CONFIG_DIR, "favorites.json")
 SERIES_FAVORITES_FILE = os.path.join(CONFIG_DIR, "series_favorites.json")
 
@@ -2321,8 +2442,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     except Exception as e:
                         print(f"[*] resolve_youtube informativo: {e}, prosseguindo para download direto...")
 
-                    fat_name_preview = re.sub(r'[^a-zA-Z0-9 _-]', '', clean_title).strip()
-                    fat_name_preview = (fat_name_preview[:26] or "FILME") + ".mp4"
+                    fat_name_preview = format_fat_media_name(clean_title)
                     with VOD_TASKS_LOCK:
                         task["title"] = clean_title
                         task["display_name"] = fat_name_preview
@@ -2632,8 +2752,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
             if duration > 300 and file_size < 1000000:
                 raise RuntimeError("Vídeo rejeitado pela CDN (arquivo muito pequeno ou aviso de método não autorizado)")
 
-            fat_name = re.sub(r'[^a-zA-Z0-9 _-]', '', clean_title).strip()
-            fat_name = (fat_name[:26] or "FILME") + ".mp4"
+            fat_name = format_fat_media_name(clean_title)
 
             if gen_template:
                 fat_size = min(file_size, 4294967000)

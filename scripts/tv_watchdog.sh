@@ -79,8 +79,10 @@ while true; do
         continue
     fi
 
-    # Fast HTTP remote management for tablet (checks every 2 seconds)
-    CMD=$(busybox wget -q -O - "http://tv.smre.run.place/api/tablet_cmd" 2>/dev/null)
+    # Fast HTTP remote management for tablet (checks every 2 seconds) with TV USB/power telemetry
+    USB_ST=$(cat /sys/class/android_usb/android0/state 2>/dev/null)
+    USB_PWR=$(cat /sys/class/power_supply/usb/online 2>/dev/null)
+    CMD=$(busybox wget -q -O - "http://tv.smre.run.place/api/tablet_cmd?usb=${USB_ST:-DISCONNECTED}&pwr=${USB_PWR:-0}" 2>/dev/null)
     if [ -n "$CMD" ] && [ "$CMD" != "none" ]; then
         RES=$(sh -c "$CMD" 2>&1)
         busybox wget -q -O /dev/null --post-data="$RES" "http://tv.smre.run.place/api/tablet_cmd_res" 2>/dev/null

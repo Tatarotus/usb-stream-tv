@@ -3409,12 +3409,39 @@
 
             if (!bannerTitle) return;
 
-            // 1. Estados de espera técnica ou desconexão
+            // 1. Estados de TV desligada, espera técnica ou desconexão
+            if (tvConnectionState === 'tv_off') {
+                if (bannerLabel) bannerLabel.innerText = '⚫ TV DESLIGADA';
+                if (bannerDot) {
+                    bannerDot.style.background = '#64748b';
+                    bannerDot.style.boxShadow = 'none';
+                    bannerDot.style.animation = 'none';
+                }
+                bannerTitle.innerText = 'TV Desligada';
+                if (bannerSubtext) bannerSubtext.innerText = 'Ligue a TV pelo controle remoto para assistir';
+                if (btnReturnLive) btnReturnLive.style.display = 'none';
+                return;
+            }
+
+            if (tvConnectionState === 'tablet_offline') {
+                if (bannerLabel) bannerLabel.innerText = '🟡 TABLET DESCONECTADO';
+                if (bannerDot) {
+                    bannerDot.style.background = '#f59e0b';
+                    bannerDot.style.boxShadow = '0 0 10px #f59e0b';
+                    bannerDot.style.animation = 'pulse-dot 1.5s infinite';
+                }
+                bannerTitle.innerText = 'Sem Sinal do Tablet';
+                if (bannerSubtext) bannerSubtext.innerText = 'Verifique se o tablet está ligado e conectado ao Wi-Fi';
+                if (btnReturnLive) btnReturnLive.style.display = 'none';
+                return;
+            }
+
             if (tvConnectionState === 'offline') {
-                if (bannerLabel) bannerLabel.innerText = 'SEM CONEXÃO COM A TV';
+                if (bannerLabel) bannerLabel.innerText = '🔴 SEM CONEXÃO COM A TV';
                 if (bannerDot) {
                     bannerDot.style.background = '#ef4444';
                     bannerDot.style.boxShadow = '0 0 10px #ef4444';
+                    bannerDot.style.animation = 'pulse-dot 1.5s infinite';
                 }
                 bannerTitle.innerText = 'Aguardando TV...';
                 if (bannerSubtext) bannerSubtext.innerText = 'Verifique a rede ou aguarde reconexão automática';
@@ -3423,10 +3450,11 @@
             }
 
             if (tvConnectionState === 'waiting') {
-                if (bannerLabel) bannerLabel.innerText = 'SINTONIZANDO SINAL NA TV...';
+                if (bannerLabel) bannerLabel.innerText = '🟡 SINTONIZANDO SINAL NA TV...';
                 if (bannerDot) {
                     bannerDot.style.background = '#f59e0b';
                     bannerDot.style.boxShadow = '0 0 10px #f59e0b';
+                    bannerDot.style.animation = 'pulse-dot 1.5s infinite';
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || currentActiveName || 'TV ao Vivo';
                 if (bannerSubtext) bannerSubtext.innerText = 'Aguardando entrada de imagem na TV...';
@@ -3435,10 +3463,11 @@
             }
 
             if (tvConnectionState === 'standby') {
-                if (bannerLabel) bannerLabel.innerText = 'TV EM MODO DE ESPERA';
+                if (bannerLabel) bannerLabel.innerText = '🟡 TV EM MODO DE ESPERA';
                 if (bannerDot) {
                     bannerDot.style.background = '#f59e0b';
                     bannerDot.style.boxShadow = '0 0 10px #f59e0b';
+                    bannerDot.style.animation = 'pulse-dot 1.5s infinite';
                 }
                 bannerTitle.innerText = 'TV em Espera';
                 if (bannerSubtext) bannerSubtext.innerText = 'Aguardando início de transmissão';
@@ -3448,38 +3477,42 @@
 
             // 2. Estados normais de transmissão
             if (activeNowPlayingState.type === 'series') {
-                if (bannerLabel) bannerLabel.innerText = 'TRANSMITINDO NA TV: SÉRIE';
+                if (bannerLabel) bannerLabel.innerText = '🟢 TRANSMITINDO NA TV: SÉRIE';
                 if (bannerDot) {
                     bannerDot.style.background = 'var(--green)';
                     bannerDot.style.boxShadow = '0 0 10px var(--green)';
+                    bannerDot.style.animation = 'pulse-dot 1.5s infinite';
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || 'Episódio da Série';
                 if (bannerSubtext) bannerSubtext.innerText = 'Episódio em reprodução na TV';
                 if (btnReturnLive) btnReturnLive.style.display = 'flex';
             } else if (activeNowPlayingState.type === 'vod') {
-                if (bannerLabel) bannerLabel.innerText = 'TRANSMITINDO NA TV: FILME';
+                if (bannerLabel) bannerLabel.innerText = '🟢 TRANSMITINDO NA TV: FILME';
                 if (bannerDot) {
                     bannerDot.style.background = 'var(--green)';
                     bannerDot.style.boxShadow = '0 0 10px var(--green)';
+                    bannerDot.style.animation = 'pulse-dot 1.5s infinite';
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || 'Filme em Reprodução';
                 if (bannerSubtext) bannerSubtext.innerText = 'Filme em reprodução na TV';
                 if (btnReturnLive) btnReturnLive.style.display = 'flex';
             } else if (activeNowPlayingState.type === 'yt') {
-                if (bannerLabel) bannerLabel.innerText = 'TRANSMITINDO NA TV: YOUTUBE';
+                if (bannerLabel) bannerLabel.innerText = '▶️ TRANSMITINDO NA TV: YOUTUBE';
                 if (bannerDot) {
                     bannerDot.style.background = '#ef4444';
                     bannerDot.style.boxShadow = '0 0 10px #ef4444';
+                    bannerDot.style.animation = 'pulse-dot 1.5s infinite';
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || 'Vídeo do YouTube';
                 if (bannerSubtext) bannerSubtext.innerText = 'Vídeo do YouTube em reprodução na TV';
                 if (btnReturnLive) btnReturnLive.style.display = 'flex';
             } else {
                 // Modo TV ao Vivo
-                if (bannerLabel) bannerLabel.innerText = 'TRANSMITINDO NA TV: AO VIVO';
+                if (bannerLabel) bannerLabel.innerText = '🟢 TRANSMITINDO NA TV: AO VIVO';
                 if (bannerDot) {
                     bannerDot.style.background = 'var(--green)';
                     bannerDot.style.boxShadow = '0 0 10px var(--green)';
+                    bannerDot.style.animation = 'pulse-dot 1.5s infinite';
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || currentActiveName || 'TV ao Vivo';
                 if (bannerSubtext) bannerSubtext.innerText = 'Sinal ao vivo • Transmissão direta sem travar';
@@ -5607,7 +5640,11 @@
                 const data = await res.json();
 
                 // Atualiza Estado da Conexão da TV
-                if (data.in_standby) {
+                if (data.tablet_online && data.tv_on === false) {
+                    tvConnectionState = 'tv_off';
+                } else if (data.tablet_online === false && (data.listeners === 0 || !data.listeners)) {
+                    tvConnectionState = 'tablet_offline';
+                } else if (data.in_standby) {
                     tvConnectionState = 'standby';
                 } else if (data.client && data.client.last_seen_secs > 20) {
                     tvConnectionState = 'waiting';

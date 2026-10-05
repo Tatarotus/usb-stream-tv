@@ -1138,6 +1138,7 @@ def resolve_youtube(yt_url):
 
     socks_p = get_effective_socks_proxy()
     proxy_clean = socks_p.replace("socks5h://", "socks5://") if socks_p else ""
+    used_proxy = False
 
     # 1. Tentativa Direta (rápida, com cookies se disponíveis)
     res = None
@@ -1171,6 +1172,7 @@ def resolve_youtube(yt_url):
     # 2. Contingência via proxy residencial móvel
     if need_retry and proxy_clean:
         print("[*] yt-dlp usando proxy residencial de contingência...")
+        used_proxy = True
         try:
             res = subprocess.run(_build_cmd(use_cookies=has_cookies, proxy=proxy_clean), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=35)
         except subprocess.TimeoutExpired:
@@ -1179,6 +1181,7 @@ def resolve_youtube(yt_url):
         # Se falhou com cookies no proxy, tenta última vez SEM cookies via proxy
         if (not res or res.returncode != 0) and has_cookies:
             print("[*] Tentativa com cookies no proxy falhou. Tentando via proxy limpo sem cookies...")
+            used_proxy = True
             try:
                 os.rename(cookies_path, cookies_path + ".expired")
             except Exception:
@@ -1441,6 +1444,9 @@ class StreamHub:
         self.tablet_pending_cmd = None
         self.tablet_cmd_res = None
         self.tablet_cmd_event = threading.Event()
+        self.tablet_last_seen = 0
+        self.tablet_usb_state = "DISCONNECTED"
+        self.tablet_usb_pwr = False
 
         # Rolling pre-buffer para clientes novos (~60 MiB = ~100s a 120s de folga na TV)
         self.prebuffer_chunks = collections.deque()
@@ -2724,6 +2730,13 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path.startswith("/remote/"):
             self.handle_remote_play(path)
         elif path == "/api/tablet_cmd":
+            usb_st = query.get("usb", [""])[0]
+            usb_pwr = query.get("pwr", [""])[0]
+            HUB.tablet_last_seen = time.time()
+            if usb_st:
+                HUB.tablet_usb_state = usb_st
+            if usb_pwr:
+                HUB.tablet_usb_pwr = (usb_pwr == "1")
             cmd = HUB.tablet_pending_cmd or "none"
             HUB.tablet_pending_cmd = None
             self.send_response(200)
@@ -3357,7 +3370,15 @@ self.addEventListener('message', (event) => {
             client_data = dict(HUB.client_telemetry)
             client_data["last_seen_secs"] = round(time.time() - HUB.telemetry_time, 1)
 
+        tablet_online = (time.time() - getattr(HUB, "tablet_last_seen", 0) < 15) if getattr(HUB, "tablet_last_seen", 0) > 0 else False
+        tv_on = False
+        if getattr(HUB, "tablet_usb_pwr", False) or getattr(HUB, "tablet_usb_state", "") == "CONFIGURED":
+            tv_on = True
+
         data = {
+            "tv_on": tv_on,
+            "tv_usb_state": getattr(HUB, "tablet_usb_state", "DISCONNECTED"),
+            "tablet_online": tablet_online,
             "active_channel_id": HUB.current_channel_id,
             "active_channel_name": HUB.current_channel_name,
             "active_url": HUB.current_url,

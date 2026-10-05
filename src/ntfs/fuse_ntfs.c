@@ -36,8 +36,8 @@
 
 #define FILE_NAME "tv_stream.img"
 #define FILE_INO 2
-#define MIN_STREAM_START (12ULL * 1024 * 1024)     /* 12 MiB initial buffer (~20-25s) */
-#define LEADBACK (12ULL * 1024 * 1024)             /* 12 MiB leadback (~20-25s cushion) */
+#define MIN_STREAM_START (6ULL * 1024 * 1024)      /* 6 MiB initial buffer (~9-10s, fast open <4s) */
+#define LEADBACK (16ULL * 1024 * 1024)             /* 16 MiB leadback (~26s steady cushion) */
 #define FLOW_CONTROL_LIMIT (64ULL * 1024 * 1024)    /* 64 MiB flow control limit (~100-120s) */
 #define HDRCACHESZ 65536
 
@@ -420,6 +420,8 @@ static void on_open(void) {
  *  D13.1 LIVE STREAM BACKEND (Universal Dynamic Floating Anchor & Pacing)
  *  g_mu MUST be held by caller.
  * ========================================================================= */
+static uint64_t s_last_pace_ms = 0;
+
 static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t deadline_ms) {
     /* Isolate ConnectShare tail probe near EOF of 8GB virtual NTFS file */
     if (foff >= NTFS_FILE_SIZE - 10ULL * 1024 * 1024) {
@@ -439,14 +441,15 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
 
     /* PROBE ISOLATION:
      * ConnectShare probes distant file offsets (e.g. 256MB, 600MB, 7GB) when reading directory
-     * or checking for media container atoms. If foff is well beyond active streaming head,
-     * return standard MPEG-TS NULL packets immediately WITHOUT corrupting playback anchor! */
-    if (g_base_valid && foff >= 8ULL * 1024 * 1024) {
-        uint64_t s_probe = foff_to_stream_pos(foff);
-        if (s_probe >= g_s_write + 2ULL * 1024 * 1024) {
-            fill_null(dst, c);
-            return;
-        }
+     * or checking for media container atoms.
+     * Check if this read is a continuation of the active sequential playback.
+     * Any distant non-sequential read (>= 8 MB) MUST return standard MPEG-TS NULL packets
+     * immediately WITHOUT corrupting playback anchor or incrementing epoch! */
+    int is_seq_read = (g_prev_Fend == (uint64_t)-1 || foff == g_prev_Fend ||
+                       (foff > g_prev_Fend && foff - g_prev_Fend <= 262144));
+    if (g_base_valid && foff >= 8ULL * 1024 * 1024 && !is_seq_read) {
+        fill_null(dst, c);
+        return;
     }
 
     int is_reopen = 0;
@@ -455,10 +458,10 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
     } else if (foff == 0 && (now - g_last_file_read_ms > 1500 || g_prev_Fend > 131072)) {
         /* TV explicitly paused or restarted reading from beginning of file */
         is_reopen = 1;
-    } else {
+    } else if (is_seq_read) {
         uint64_t s0 = foff_to_stream_pos(foff);
         if (s0 < ring_old) {
-            /* Out of ring buffer bounds: must re-anchor */
+            /* Out of ring buffer bounds during sequential streaming: must re-anchor */
             is_reopen = 1;
         }
     }
@@ -473,7 +476,8 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
         }
         if (g_have_data && g_s_write > 0) {
             uint64_t snapped_abs = 0;
-            uint64_t live_target = (g_s_write > LEADBACK) ? g_s_write - LEADBACK : 0;
+            uint64_t eff_lead = (g_s_write > LEADBACK) ? LEADBACK : (g_s_write > 2ULL * 1024 * 1024 ? g_s_write - 2ULL * 1024 * 1024 : 0);
+            uint64_t live_target = (g_s_write > eff_lead) ? g_s_write - eff_lead : 0;
             if (snap_open_base_target(live_target, &snapped_abs)) {
                 g_anchor_foff = foff;
                 g_anchor_stream_pos = snapped_abs;
@@ -482,6 +486,7 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
                 g_last_tv_stream_pos = snapped_abs;
                 g_base_valid = 1;
                 g_prev_Fend = (uint64_t)-1;
+                s_last_pace_ms = 0;
                 size_t c_h = 65536;
                 if (c_h > HDRCACHESZ) c_h = HDRCACHESZ;
                 uint64_t reader_p = snapped_abs;
@@ -539,6 +544,7 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
                 g_anchor_foff = F;
                 g_anchor_stream_pos = snapped_abs;
                 g_epoch++;
+                s_last_pace_ms = 0;
                 start = snapped_abs;
                 fprintf(stderr, "[FUSE] Re-anchored ring wrap at F=%llu -> stream_pos=%llu (S_write=%llu)\n",
                         (unsigned long long)F, (unsigned long long)snapped_abs, (unsigned long long)g_s_write);
@@ -553,20 +559,31 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
             g_live_starve_near_count++;
         }
 
-        /* PACING / FLOW CONTROL:
-         * If TV is reading sequential blocks and lead margin is getting low (< 8 MB),
-         * gently throttle read throughput (~1.0 MB/s max) so TV read-ahead does not deplete the cushion. */
+        /* CLOSED-LOOP ADAPTIVE BUFFER GOVERNOR:
+         * If TV is reading sequential blocks and lead margin is getting low (< 12 MB),
+         * throttle read throughput based on remaining margin so TV read-ahead never depletes cushion. */
         if (start < g_s_write) {
             uint64_t lead_margin = g_s_write - start;
-            if (lead_margin < 8ULL * 1024 * 1024 && g_prev_Fend != (uint64_t)-1 && F >= g_prev_Fend) {
-                static uint64_t s_last_pace_ms = 0;
+            if (lead_margin < 12ULL * 1024 * 1024 && g_prev_Fend != (uint64_t)-1 && F >= g_prev_Fend) {
                 uint64_t pace_now = now_ms();
                 if (s_last_pace_ms > 0 && pace_now >= s_last_pace_ms) {
                     uint64_t elapsed_ms = pace_now - s_last_pace_ms;
-                    uint64_t target_ms = (uint64_t)cc * 1000ULL / (1000ULL * 1024ULL); /* 1.0 MB/s */
+                    uint64_t target_rate_kbps;
+                    uint64_t max_clamp_ms;
+                    if (lead_margin < 4ULL * 1024 * 1024) {
+                        target_rate_kbps = 480; /* ~3.8 Mbps: slower than 5.0 Mbps stream, forces margin expansion */
+                        max_clamp_ms = 260;
+                    } else if (lead_margin < 8ULL * 1024 * 1024) {
+                        target_rate_kbps = 600; /* ~4.8 Mbps: matches stream rate */
+                        max_clamp_ms = 210;
+                    } else {
+                        target_rate_kbps = 900; /* ~7.2 Mbps: gentle throttle */
+                        max_clamp_ms = 140;
+                    }
+                    uint64_t target_ms = (uint64_t)cc * 1000ULL / (target_rate_kbps * 1024ULL);
                     if (target_ms > elapsed_ms) {
                         uint64_t diff_ms = target_ms - elapsed_ms;
-                        if (diff_ms > 50) diff_ms = 50; /* Clamp sleep to max 50ms */
+                        if (diff_ms > max_clamp_ms) diff_ms = max_clamp_ms;
                         uint64_t sleep_us = diff_ms * 1000ULL;
                         pthread_mutex_unlock(&g_mu);
                         usleep((useconds_t)sleep_us);
@@ -578,24 +595,30 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
         }
 
         if (start >= g_s_write) {
-            if (start >= g_s_write + 1048576) {
-                /* TV probed into unwritten space: return NULLs without corrupting anchor */
+            if (!is_seq_read && F >= 8ULL * 1024 * 1024) {
+                /* Non-sequential probe into unwritten space: deliver NULLs without moving anchor */
                 fill_null(dst + fo, cc);
                 fo += cc;
                 continue;
-            } else {
-                /* Feeder underrun: wait up to deadline_ms for feeder to supply data */
-                while (start >= g_s_write && now_ms() < deadline_ms && g_running) {
-                    wait_step();
-                }
-                if (start >= g_s_write) {
-                    /* Feeder starved: NEVER RE-ANCHOR BACKWARDS!
-                     * Delivering standard MPEG-TS NULL packets preserves decoder PTS/DTS timeline */
-                    g_live_fill_null_count++;
-                    fill_null(dst + fo, cc);
-                    fo += cc;
-                    continue;
-                }
+            }
+
+            /* Feeder underrun on sequential playback: wait up to deadline_ms for feeder to supply data */
+            while (start >= g_s_write && now_ms() < deadline_ms && g_running) {
+                wait_step();
+            }
+            if (start >= g_s_write) {
+                /* Feeder starved: do NOT re-anchor backwards!
+                 * Deliver standard MPEG-TS NULL packets PACED at real-time rate (~600 KB/s, ~200ms per 128KB)
+                 * so the TV maintains steady playback timeline and does not rush ahead into the future */
+                g_live_fill_null_count++;
+                fill_null(dst + fo, cc);
+                uint64_t pace_ms = (uint64_t)cc * 1000ULL / (600ULL * 1024ULL);
+                if (pace_ms > 200) pace_ms = 200;
+                pthread_mutex_unlock(&g_mu);
+                usleep((useconds_t)(pace_ms * 1000ULL));
+                pthread_mutex_lock(&g_mu);
+                fo += cc;
+                continue;
             }
         }
 
@@ -853,6 +876,7 @@ void ntfs_serve_disk(uint8_t *dst, uint64_t disk_offset, size_t n, uint64_t dead
                         g_anchor_foff = (uint64_t)-1;
                         g_anchor_stream_pos = 0;
                         g_prev_Fend = (uint64_t)-1;
+                        pthread_cond_broadcast(&g_cv);
                     }
                 }
 
@@ -978,15 +1002,19 @@ static void *feeder_thread(void *arg) {
             }
 
             /* Flow control: Prevent writer from overrunning 64MB ring buffer during active playback */
-            while (g_running && g_have_data && g_base_valid && g_last_tv_stream_pos > 0) {
-                if (!g_playback_armed || (g_last_video_read_ms > 0 && now_ms() - g_last_video_read_ms > 2000)) {
-                    /* TV is in menu / idle / stopped — do NOT throttle feeder! Keep live ring buffer fresh! */
-                    break;
-                }
+            while (g_running) {
                 pthread_mutex_lock(&g_mu);
-                uint64_t lead = (g_s_write > g_last_tv_stream_pos) ? (g_s_write - g_last_tv_stream_pos) : 0;
+                int need_throttle = 0;
+                if (g_have_data && g_base_valid && g_last_tv_stream_pos > 0 && g_playback_armed) {
+                    if (g_last_video_read_ms > 0 && now_ms() - g_last_video_read_ms <= 2000) {
+                        uint64_t lead = (g_s_write > g_last_tv_stream_pos) ? (g_s_write - g_last_tv_stream_pos) : 0;
+                        if (lead > FLOW_CONTROL_LIMIT) {
+                            need_throttle = 1;
+                        }
+                    }
+                }
                 pthread_mutex_unlock(&g_mu);
-                if (lead > FLOW_CONTROL_LIMIT) {
+                if (need_throttle) {
                     usleep(50000);
                 } else {
                     break;

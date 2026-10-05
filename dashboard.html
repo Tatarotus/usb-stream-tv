@@ -4470,13 +4470,20 @@
                 requestNotificationPermission();
             }
 
+            // Garante que a gaveta do YouTube esteja visível
+            const drawer = document.getElementById('saved-yt-drawer');
+            if (drawer) {
+                drawer.style.display = 'block';
+                const btn = document.getElementById('btn-toggle-yt');
+                if (btn) btn.innerText = '✕ Fechar';
+            }
+
             let videoTitle = rawTitle.trim();
             if (!videoTitle && rawText) {
                 const before = rawText.replace(/https?:\/\/[^\s"'<>]+.*/, '').trim();
                 if (before) videoTitle = before;
             }
             if (!videoTitle) videoTitle = 'Vídeo do YouTube';
-            showActionBanner(`📥 Salvando vídeo no Cinema da TV... Aguarde.`);
 
             // Preenche input do YouTube como feedback visual
             const input = document.getElementById('yt-url-input');
@@ -4484,6 +4491,14 @@
                 input.value = targetUrl;
                 onYtInput(targetUrl);
             }
+
+            const isLive = targetUrl.toLowerCase().includes('/live/') || targetUrl.toLowerCase().includes('/channel/');
+            if (isLive) {
+                showActionBanner(`🔴 Transmissão ao vivo detectada: <strong>${escapeHtml(videoTitle)}</strong>.<br>Toque em <strong>▶️ ASSISTIR AGORA NA TV</strong> para sintonizar.`, 'warn');
+                return;
+            }
+
+            showActionBanner(`📥 Salvando vídeo no Cinema da TV... Aguarde.`);
 
             // Envia requisição para preparar o VOD em segundo plano sem afetar a TV
             const pin = getAuthPin();

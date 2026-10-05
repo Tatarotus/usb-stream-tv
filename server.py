@@ -1424,8 +1424,8 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_
         ua = "Mozilla/5.0" if ("studut.shop" in url or "m3u8" in url or is_googlevideo) else "IPTVSmartersPro"
         cmd.extend(["-user_agent", ua])
 
-        # Proxy residencial adicionado apenas se use_proxy for explicitamente True, nunca para googlevideo
-        if not is_googlevideo and use_proxy and RESIDENTIAL_HTTP_PROXY:
+        # Proxy residencial adicionado se use_proxy for explicitamente True (necessario para googlevideo quando assinado pelo proxy)
+        if use_proxy and RESIDENTIAL_HTTP_PROXY:
             cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
 
         if ".mp4" in url_lower or ".mkv" in url_lower or ".ts" in url_lower or is_googlevideo or is_live or not url_lower.endswith(".m3u8"):
@@ -1468,7 +1468,7 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_
             "-probesize", "1000000",
             "-analyzeduration", "1500000"
         ])
-        if not is_googlevideo and use_proxy and RESIDENTIAL_HTTP_PROXY:
+        if use_proxy and RESIDENTIAL_HTTP_PROXY:
             cmd.extend(["-http_proxy", RESIDENTIAL_HTTP_PROXY])
         if start_sec and start_sec > 0:
             cmd.extend(["-ss", str(int(start_sec))])
@@ -4015,6 +4015,11 @@ self.addEventListener('message', (event) => {
             self.end_headers()
             self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
             return
+
+        if ACTIVE_VOD_TASK or getattr(HUB, "tablet_vod_mode", ""):
+            set_active_vod(None)
+            HUB.tablet_vod_mode = ""
+            dispatch_device_cmd("sh /data/local/tmp/switch_live.sh")
 
         ok = HUB.switch_youtube(meta)
         self.send_response(200)

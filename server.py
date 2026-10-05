@@ -2170,6 +2170,26 @@ def resolve_vod_stream_url(url):
             return url
     return url
 
+def is_sar_samsung_compatible(sar):
+    """Verifica se o Sample Aspect Ratio (SAR) é compatível com o decodificador Samsung TV."""
+    if not sar:
+        return True
+    s = str(sar).strip()
+    if s in ("1:1", "1/1", "0:1", "", "160:159", "64:45", "40:33", "12:11", "10:11"):
+        return True
+    try:
+        sep = ":" if ":" in s else ("/" if "/" in s else None)
+        if sep:
+            num, den = map(float, s.split(sep, 1))
+            if den > 0:
+                ratio = num / den
+                # Tolera pequenas variações de digitalização/captura de TV (entre 0.85 e 1.18)
+                if 0.85 <= ratio <= 1.18:
+                    return True
+    except Exception:
+        pass
+    return False
+
 def probe_vod_stream(url, use_proxy=False):
     """Obtém metadados de vídeo, áudio e duração remota via ffprobe."""
     probe_cmd = [
@@ -2378,7 +2398,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     w = int(st.get("width", 0) or 0)
                     h = int(st.get("height", 0) or 0)
                     sar = (st.get("sample_aspect_ratio") or "").strip()
-                    is_compatible_sar = sar in ("1:1", "1/1", "0:1", "", "160:159", "64:45", "40:33", "12:11", "10:11") or not sar
+                    is_compatible_sar = is_sar_samsung_compatible(sar)
                     if codec in ("h264", "avc1") and pix in ("yuv420p", "yuvj420p", "") and lvl <= 42 and w <= 1920 and h <= 1080 and is_compatible_sar:
                         can_copy_video = True
                 except Exception:
@@ -2486,7 +2506,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     w = int(v_stream.get("width", 0) or 0)
                     h = int(v_stream.get("height", 0) or 0)
                     sar = (v_stream.get("sample_aspect_ratio") or "").strip()
-                    is_compatible_sar = sar in ("1:1", "1/1", "0:1", "", "160:159", "64:45", "40:33", "12:11", "10:11") or not sar
+                    is_compatible_sar = is_sar_samsung_compatible(sar)
                     if codec in ("h264", "avc1") and pix in ("yuv420p", "yuvj420p", "") and lvl <= 42 and w <= 1920 and h <= 1080 and is_compatible_sar:
                         can_copy_video = True
 

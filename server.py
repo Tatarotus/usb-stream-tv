@@ -380,7 +380,16 @@ class FavoritesManager:
                 tmp = self.filepath + ".tmp"
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(sorted(list(self.favorites)), f, indent=2)
-                os.replace(tmp, self.filepath)
+                try:
+                    os.replace(tmp, self.filepath)
+                except OSError:
+                    # Em Docker bind-mount de arquivo individual, os.replace falha com [Errno 16] EBUSY
+                    with open(self.filepath, "w", encoding="utf-8") as f:
+                        json.dump(sorted(list(self.favorites)), f, indent=2)
+                    try:
+                        os.remove(tmp)
+                    except Exception:
+                        pass
                 # Cria cópia de segurança permanente (.bak)
                 bak = self.filepath + ".bak"
                 with open(bak, "w", encoding="utf-8") as f:

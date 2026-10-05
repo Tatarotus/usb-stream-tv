@@ -2904,7 +2904,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if not sw:
             sw = """// Service Worker para PWA do Controle Remoto
-const CACHE_NAME = 'controle-tv-v16';
+const CACHE_NAME = 'controle-tv-v17';
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
@@ -9872,7 +9872,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v16') caches.delete(k);
+                        if (k !== 'controle-tv-v17') caches.delete(k);
                     });
                 }).catch(() => {});
             }

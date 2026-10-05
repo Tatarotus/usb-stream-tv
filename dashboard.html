@@ -101,7 +101,7 @@
             white-space: nowrap;
         }
 
-        /* 1. TOPO: Central Universal da TV (Status, O que está no ar & Acesso aos Salvos) */
+        /* 1. TOPO: Central Universal da TV (Status de Transmissão na TV) */
         header.top-tv-banner {
             display: flex;
             flex-direction: column;
@@ -109,97 +109,17 @@
             background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
             border: 3px solid var(--gold);
             border-radius: var(--btn-radius);
-            padding: 16px 18px;
+            padding: 18px 20px;
             position: relative;
             box-shadow: 0 10px 28px rgba(250, 204, 21, 0.16);
-            cursor: pointer;
-            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
             user-select: none;
             -webkit-tap-highlight-color: transparent;
-        }
-        header.top-tv-banner:hover {
-            border-color: var(--gold);
-            box-shadow: 0 8px 32px rgba(250, 204, 21, 0.26);
-        }
-        header.top-tv-banner:active {
-            transform: scale(0.99);
-            border-color: var(--gold);
-        }
-        header.top-tv-banner:focus-visible {
-            outline: 3px solid var(--gold);
-            outline-offset: 3px;
-        }
-
-        .top-tv-status-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            flex-wrap: wrap;
         }
 
         .top-tv-content {
             display: flex;
             flex-direction: column;
-            gap: 4px;
-        }
-
-        .tv-status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 16px;
-            font-weight: 800;
-            padding: 7px 14px;
-            border-radius: 30px;
-            width: fit-content;
-            background: rgba(34, 197, 94, 0.15);
-            color: var(--green);
-            border: 2px solid rgba(34, 197, 94, 0.4);
-            letter-spacing: 0.3px;
-        }
-        .tv-status-badge.waiting {
-            background: rgba(250, 204, 21, 0.15);
-            color: var(--gold);
-            border-color: rgba(250, 204, 21, 0.4);
-        }
-        .tv-status-badge.offline {
-            background: rgba(239, 68, 68, 0.2);
-            color: var(--red);
-            border-color: #ef4444;
-        }
-
-        /* Badge Dinâmica de Mídia/Downloads no Header */
-        .header-media-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 15px;
-            font-weight: 800;
-            padding: 7px 14px;
-            border-radius: 30px;
-            background: rgba(56, 189, 248, 0.12);
-            color: #38bdf8;
-            border: 2px solid rgba(56, 189, 248, 0.35);
-            letter-spacing: 0.2px;
-            transition: all 0.2s ease;
-        }
-        .header-media-badge.has-ready {
-            background: rgba(250, 204, 21, 0.14);
-            color: var(--gold);
-            border-color: rgba(250, 204, 21, 0.45);
-        }
-        .header-media-badge.downloading {
-            background: rgba(234, 179, 8, 0.2);
-            color: var(--gold);
-            border-color: var(--gold);
-            box-shadow: 0 0 12px rgba(250, 204, 21, 0.4);
-            animation: pulse-badge 1.6s infinite ease-in-out;
-        }
-        @keyframes pulse-badge {
-            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.4); }
-            50% { transform: scale(1.02); box-shadow: 0 0 0 6px rgba(250, 204, 21, 0); }
-            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(250, 204, 21, 0); }
+            gap: 6px;
         }
 
         /* SELETOR PRINCIPAL DE MODO: SALVOS vs SÉRIES vs FILMES vs TV AO VIVO */
@@ -2423,30 +2343,18 @@
             <button style="background:transparent; border:none; color:var(--text-dim); font-size:24px; padding:4px;" onclick="dismissPWABanner()">✕</button>
         </div>
 
-        <!-- TOPO: Central Universal da TV (Status, O que está no ar & Acesso aos Salvos) -->
-        <header id="top-tv-banner" class="top-tv-banner" onclick="openDownloadsModal()" role="button" tabindex="0" aria-label="Ver vídeos salvos e downloads da TV">
-            <div class="top-tv-status-row">
-                <div id="tv-status-badge" class="tv-status-badge" role="status" aria-live="polite">
-                    <span>🟢</span>
-                    <span id="tv-status-text">Conectando à TV...</span>
-                </div>
-                <div id="header-media-badge" class="header-media-badge" onclick="event.stopPropagation(); openDownloadsModal()">
-                    <span id="header-media-icon">💾</span>
-                    <span id="header-media-text">Memória da TV</span>
-                    <span style="font-size: 14px; opacity: 0.8;">▾</span>
-                </div>
-            </div>
-            
+        <!-- TOPO: Central Universal da TV (Status de Transmissão na TV) -->
+        <header id="top-tv-banner" class="top-tv-banner" aria-label="Status de transmissão da TV">
             <div class="top-tv-content">
                 <div id="tv-banner-label" class="now-playing-label">
                     <span id="tv-banner-dot" class="pulsing-dot"></span>
-                    <span id="tv-banner-label-text">TRANSMITINDO NA TV AO VIVO</span>
+                    <span id="tv-banner-label-text">TRANSMITINDO NA TV: AO VIVO</span>
                 </div>
                 <div id="tv-banner-title" class="now-playing-title">Carregando canal...</div>
-                <div id="tv-banner-subtext" class="now-playing-subtext">Modo TV ao Vivo • Toque para ver os salvos na TV</div>
+                <div id="tv-banner-subtext" class="now-playing-subtext">Sinal ao vivo • Transmissão direta sem travar</div>
             </div>
 
-            <button id="btn-banner-return-live" class="btn-return-live" style="display: none;" onclick="event.stopPropagation(); returnToLiveTv()">
+            <button id="btn-banner-return-live" class="btn-return-live" style="display: none;" onclick="returnToLiveTv()">
                 📺 VOLTAR PARA A TV AO VIVO
             </button>
         </header>
@@ -2598,16 +2506,6 @@
 
          <!-- ==================== ÁREA DO MODO TV AO VIVO ==================== -->
         <div id="section-live" style="display: none; flex-direction: column; gap: 16px;">
-
-            <!-- Cartão "No Ar Agora na TV" -->
-            <div class="now-playing-card">
-                <div class="now-playing-label">
-                    <span class="pulsing-dot"></span>
-                    VOCÊ ESTÁ ASSISTINDO NA TV
-                </div>
-                <div id="now-playing-title" class="now-playing-title">Sintonizando...</div>
-                <div id="now-playing-subtext" class="now-playing-subtext">Sinal ao vivo • Transmissão direta</div>
-            </div>
 
             <!-- Grade Tátil de Canais -->
             <div class="section-header">
@@ -3496,10 +3394,11 @@
 
         // Estado da Central Universal da TV no Topo
         let activeNowPlayingState = {
-            type: 'live', // 'vod', 'yt', 'live'
+            type: 'live', // 'live', 'series', 'vod', 'yt'
             title: '',
             subtext: ''
         };
+        let tvConnectionState = 'online'; // 'online', 'standby', 'waiting', 'offline'
 
         function renderTvBanner() {
             const bannerLabel = document.getElementById('tv-banner-label-text');
@@ -3510,35 +3409,80 @@
 
             if (!bannerTitle) return;
 
-            const readyCount = (vodTasks || []).filter(t => t.status === 'ready').length;
-            const savedHint = readyCount > 0 ? `Toque para ver os ${readyCount} vídeos salvos na TV` : 'Toque para abrir a lista de vídeos salvos';
+            // 1. Estados de espera técnica ou desconexão
+            if (tvConnectionState === 'offline') {
+                if (bannerLabel) bannerLabel.innerText = 'SEM CONEXÃO COM A TV';
+                if (bannerDot) {
+                    bannerDot.style.background = '#ef4444';
+                    bannerDot.style.boxShadow = '0 0 10px #ef4444';
+                }
+                bannerTitle.innerText = 'Aguardando TV...';
+                if (bannerSubtext) bannerSubtext.innerText = 'Verifique a rede ou aguarde reconexão automática';
+                if (btnReturnLive) btnReturnLive.style.display = 'none';
+                return;
+            }
 
-            if (activeNowPlayingState.type === 'vod') {
-                if (bannerLabel) bannerLabel.innerText = 'PASSANDO AGORA NO CINEMA DA TV';
+            if (tvConnectionState === 'waiting') {
+                if (bannerLabel) bannerLabel.innerText = 'SINTONIZANDO SINAL NA TV...';
+                if (bannerDot) {
+                    bannerDot.style.background = '#f59e0b';
+                    bannerDot.style.boxShadow = '0 0 10px #f59e0b';
+                }
+                bannerTitle.innerText = activeNowPlayingState.title || currentActiveName || 'TV ao Vivo';
+                if (bannerSubtext) bannerSubtext.innerText = 'Aguardando entrada de imagem na TV...';
+                if (btnReturnLive) btnReturnLive.style.display = 'none';
+                return;
+            }
+
+            if (tvConnectionState === 'standby') {
+                if (bannerLabel) bannerLabel.innerText = 'TV EM MODO DE ESPERA';
+                if (bannerDot) {
+                    bannerDot.style.background = '#f59e0b';
+                    bannerDot.style.boxShadow = '0 0 10px #f59e0b';
+                }
+                bannerTitle.innerText = 'TV em Espera';
+                if (bannerSubtext) bannerSubtext.innerText = 'Aguardando início de transmissão';
+                if (btnReturnLive) btnReturnLive.style.display = 'none';
+                return;
+            }
+
+            // 2. Estados normais de transmissão
+            if (activeNowPlayingState.type === 'series') {
+                if (bannerLabel) bannerLabel.innerText = 'TRANSMITINDO NA TV: SÉRIE';
+                if (bannerDot) {
+                    bannerDot.style.background = 'var(--green)';
+                    bannerDot.style.boxShadow = '0 0 10px var(--green)';
+                }
+                bannerTitle.innerText = activeNowPlayingState.title || 'Episódio da Série';
+                if (bannerSubtext) bannerSubtext.innerText = 'Episódio em reprodução na TV';
+                if (btnReturnLive) btnReturnLive.style.display = 'flex';
+            } else if (activeNowPlayingState.type === 'vod') {
+                if (bannerLabel) bannerLabel.innerText = 'TRANSMITINDO NA TV: FILME';
                 if (bannerDot) {
                     bannerDot.style.background = 'var(--green)';
                     bannerDot.style.boxShadow = '0 0 10px var(--green)';
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || 'Filme em Reprodução';
-                if (bannerSubtext) bannerSubtext.innerText = `Modo Cinema • Controle de Pausa na TV • ${savedHint}`;
+                if (bannerSubtext) bannerSubtext.innerText = 'Filme em reprodução na TV';
                 if (btnReturnLive) btnReturnLive.style.display = 'flex';
             } else if (activeNowPlayingState.type === 'yt') {
-                if (bannerLabel) bannerLabel.innerText = 'PASSANDO AGORA NO YOUTUBE DA TV';
+                if (bannerLabel) bannerLabel.innerText = 'TRANSMITINDO NA TV: YOUTUBE';
                 if (bannerDot) {
                     bannerDot.style.background = '#ef4444';
                     bannerDot.style.boxShadow = '0 0 10px #ef4444';
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || 'Vídeo do YouTube';
-                if (bannerSubtext) bannerSubtext.innerText = `Vídeo do YouTube • Transmitindo na TV • ${savedHint}`;
+                if (bannerSubtext) bannerSubtext.innerText = 'Vídeo do YouTube em reprodução na TV';
                 if (btnReturnLive) btnReturnLive.style.display = 'flex';
             } else {
-                if (bannerLabel) bannerLabel.innerText = 'TRANSMITINDO NA TV AO VIVO';
+                // Modo TV ao Vivo
+                if (bannerLabel) bannerLabel.innerText = 'TRANSMITINDO NA TV: AO VIVO';
                 if (bannerDot) {
                     bannerDot.style.background = 'var(--green)';
                     bannerDot.style.boxShadow = '0 0 10px var(--green)';
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || currentActiveName || 'TV ao Vivo';
-                if (bannerSubtext) bannerSubtext.innerText = `Modo TV ao Vivo • ${savedHint}`;
+                if (bannerSubtext) bannerSubtext.innerText = 'Sinal ao vivo • Transmissão direta sem travar';
                 if (btnReturnLive) btnReturnLive.style.display = 'none';
             }
         }
@@ -3657,15 +3601,23 @@
                 activeVodTask = data.active_vod;
                 vodTasks = data.tasks || [];
 
-                // 1. Atualiza Central Universal da TV no Topo (Modo Cinema VOD)
+                // 1. Atualiza Central Universal da TV no Topo (Modo Cinema VOD / Séries / YouTube)
                 if (activeVodTask) {
                     const activeTaskObj = vodTasks.find(t => t.id === activeVodTask);
-                    const name = activeTaskObj ? (activeTaskObj.title || activeTaskObj.display_name) : 'Filme em Reprodução';
+                    const name = activeTaskObj ? (activeTaskObj.title || activeTaskObj.display_name) : 'Vídeo em Reprodução';
+                    let vType = 'vod';
+                    if (activeTaskObj) {
+                        if (isYtTask(activeTaskObj)) vType = 'yt';
+                        else if (isSeriesTask(activeTaskObj)) vType = 'series';
+                        else vType = 'vod';
+                    } else if (name && (/\bs\d{1,2}e\d{1,2}\b/i.test(name) || /temporada|epis[oó]dio/i.test(name))) {
+                        vType = 'series';
+                    }
                     activeNowPlayingState = {
-                        type: 'vod',
+                        type: vType,
                         title: name
                     };
-                } else if (activeNowPlayingState.type === 'vod') {
+                } else if (activeNowPlayingState.type === 'vod' || activeNowPlayingState.type === 'series') {
                     activeNowPlayingState = {
                         type: 'live',
                         title: currentActiveName || 'TV ao Vivo'
@@ -3682,31 +3634,8 @@
                     if (savedDisk) savedDisk.innerHTML = `${diskText} • Tocam direto sem internet`;
                 }
 
-                // 3. Atualiza Badge Dinâmica de Mídia no Glance Header
-                const headerMediaBadge = document.getElementById('header-media-badge');
-                const headerMediaText = document.getElementById('header-media-text');
-                const headerMediaIcon = document.getElementById('header-media-icon');
-
                 const inProgressTasks = vodTasks.filter(t => ['processing', 'queued', 'pending', 'downloading', 'converting'].includes(t.status));
                 const readyTasks = vodTasks.filter(t => t.status === 'ready');
-
-                if (headerMediaBadge && headerMediaText) {
-                    if (inProgressTasks.length > 0) {
-                        const topTask = inProgressTasks[0];
-                        const prog = topTask.progress ? Math.round(topTask.progress) : 0;
-                        headerMediaBadge.className = 'header-media-badge downloading';
-                        if (headerMediaIcon) headerMediaIcon.innerText = '📥';
-                        headerMediaText.innerHTML = `Baixando (${prog}%)${topTask.speed ? ' • ' + escapeHtml(topTask.speed) : ''}`;
-                    } else if (readyTasks.length > 0) {
-                        headerMediaBadge.className = 'header-media-badge has-ready';
-                        if (headerMediaIcon) headerMediaIcon.innerText = '💾';
-                        headerMediaText.innerText = `${readyTasks.length} ${readyTasks.length === 1 ? 'Salvo na TV' : 'Salvos na TV'}`;
-                    } else {
-                        headerMediaBadge.className = 'header-media-badge';
-                        if (headerMediaIcon) headerMediaIcon.innerText = '💾';
-                        headerMediaText.innerText = 'Salvos na TV';
-                    }
-                }
 
                 // 4. Notificação Automática quando um Conteúdo termina o download e fica pronto
                 if (knownReadyTasks === null) {
@@ -4122,6 +4051,20 @@
             const pin = getAuthPin();
             const task = vodTasks ? vodTasks.find(t => String(t.id) === String(taskId)) : null;
             const displayTitle = title || (task ? (task.title || task.display_name) : 'Vídeo');
+            let vType = 'vod';
+            if (task) {
+                if (isYtTask(task)) vType = 'yt';
+                else if (isSeriesTask(task)) vType = 'series';
+                else vType = 'vod';
+            } else if (/\bs\d{1,2}e\d{1,2}\b/i.test(displayTitle) || /temporada|epis[oó]dio/i.test(displayTitle)) {
+                vType = 'series';
+            }
+            activeNowPlayingState = {
+                type: vType,
+                title: displayTitle
+            };
+            renderTvBanner();
+
             showActionBanner(`Iniciando <strong>${escapeHtml(displayTitle)}</strong> na TV... Aguarde.`);
 
             try {
@@ -5369,8 +5312,11 @@
             const cElem = document.getElementById(`channel-card-${ch.id}`);
             if (cElem) cElem.classList.add('active');
 
-            const nowTitle = document.getElementById('now-playing-title');
-            if (nowTitle) nowTitle.innerText = ch.name;
+            activeNowPlayingState = {
+                type: 'live',
+                title: ch.name
+            };
+            renderTvBanner();
 
             try {
                 const res = await fetch('/api/switch', {
@@ -5660,8 +5606,14 @@
                 }
                 const data = await res.json();
 
-                const statusBadge = document.getElementById('tv-status-badge');
-                const statusText = document.getElementById('tv-status-text');
+                // Atualiza Estado da Conexão da TV
+                if (data.in_standby) {
+                    tvConnectionState = 'standby';
+                } else if (data.client && data.client.last_seen_secs > 20) {
+                    tvConnectionState = 'waiting';
+                } else {
+                    tvConnectionState = 'online';
+                }
 
                 // Atualiza Estado da Central Universal da TV no Topo
                 if (data.youtube) {
@@ -5675,12 +5627,21 @@
                         notifyUser('▶️ YouTube Pronto na TV!', `"${data.youtube.title || 'Vídeo'}" começou a transmitir na TV!`, '/');
                     }
                 } else if (data.active_vod) {
-                    activeNowPlayingState.type = 'vod';
+                    const activeTaskObj = (vodTasks || []).find(t => t.id === data.active_vod);
+                    let vType = 'vod';
+                    if (activeTaskObj) {
+                        if (isYtTask(activeTaskObj)) vType = 'yt';
+                        else if (isSeriesTask(activeTaskObj)) vType = 'series';
+                        else vType = 'vod';
+                    } else if (data.vod_display_name && (/\bs\d{1,2}e\d{1,2}\b/i.test(data.vod_display_name) || /temporada|epis[oó]dio/i.test(data.vod_display_name))) {
+                        vType = 'series';
+                    }
+                    activeNowPlayingState.type = vType;
                     if (data.vod_display_name) {
                         activeNowPlayingState.title = data.vod_display_name;
                     }
                 } else {
-                    if (activeNowPlayingState.type !== 'vod') {
+                    if (activeNowPlayingState.type !== 'vod' && activeNowPlayingState.type !== 'series') {
                         activeNowPlayingState = {
                             type: 'live',
                             title: data.active_channel_name || currentActiveName || 'TV ao Vivo'
@@ -5689,27 +5650,8 @@
                 }
                 renderTvBanner();
 
-                if (data.youtube) {
-                    statusBadge.className = 'tv-status-badge';
-                    statusText.innerText = 'Assistindo YouTube na TV';
-                } else if (data.active_vod) {
-                    statusBadge.className = 'tv-status-badge';
-                    statusText.innerText = 'Assistindo Filme (Cinema)';
-                } else if (data.in_standby) {
-                    statusBadge.className = 'tv-status-badge waiting';
-                    statusText.innerText = 'TV em modo de espera';
-                } else if (data.client && data.client.last_seen_secs > 20) {
-                    statusBadge.className = 'tv-status-badge offline';
-                    statusText.innerText = 'TV sem sinal de imagem';
-                } else {
-                    statusBadge.className = 'tv-status-badge';
-                    statusText.innerText = 'TV Ligada e Transmitindo';
-                }
-
                 if (data.active_channel_name && data.active_channel_name !== currentActiveName) {
                     currentActiveName = data.active_channel_name;
-                    const nowTitle = document.getElementById('now-playing-title');
-                    if (nowTitle) nowTitle.innerText = data.active_channel_name;
                     if (activeNowPlayingState.type === 'live') {
                         activeNowPlayingState.title = data.active_channel_name;
                         renderTvBanner();
@@ -5731,12 +5673,8 @@
         }
 
         function markOfflineStatus() {
-            const statusBadge = document.getElementById('tv-status-badge');
-            const statusText = document.getElementById('tv-status-text');
-            if (statusBadge && statusText) {
-                statusBadge.className = 'tv-status-badge offline';
-                statusText.innerText = 'Sem conexão com a TV...';
-            }
+            tvConnectionState = 'offline';
+            renderTvBanner();
         }
 
         // Navegação por Teclado e D-Pad de TV Box / Desktop
@@ -5914,7 +5852,7 @@
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v16') caches.delete(k);
+                        if (k !== 'controle-tv-v17') caches.delete(k);
                     });
                 }).catch(() => {});
             }

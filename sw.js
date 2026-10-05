@@ -1,5 +1,5 @@
 // Service Worker para PWA do Controle Remoto
-const CACHE_NAME = 'controle-tv-v19';
+const CACHE_NAME = 'controle-tv-v20';
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',

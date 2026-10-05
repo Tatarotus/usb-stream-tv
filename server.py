@@ -181,6 +181,43 @@ def save_vod_tasks():
 
 load_vod_tasks()
 
+ACTIVE_VOD_FILE = os.path.join(VOD_DIR, "active_vod.txt")
+LAST_VOD_STREAM_TIME = 0.0
+
+def load_active_vod():
+    global ACTIVE_VOD_TASK
+    try:
+        if os.path.exists(ACTIVE_VOD_FILE):
+            with open(ACTIVE_VOD_FILE, "r", encoding="utf-8") as f:
+                tid = f.read().strip()
+                if tid and (tid in VOD_TASKS or os.path.exists(os.path.join(VOD_DIR, f"{tid}.mp4"))):
+                    ACTIVE_VOD_TASK = tid
+                    return tid
+    except Exception:
+        pass
+    return None
+
+def set_active_vod(task_id):
+    global ACTIVE_VOD_TASK
+    ACTIVE_VOD_TASK = task_id
+    try:
+        if task_id:
+            with open(ACTIVE_VOD_FILE, "w", encoding="utf-8") as f:
+                f.write(task_id)
+        else:
+            if os.path.exists(ACTIVE_VOD_FILE):
+                os.remove(ACTIVE_VOD_FILE)
+    except Exception:
+        pass
+
+def touch_vod_stream(task_id=None):
+    global LAST_VOD_STREAM_TIME, ACTIVE_VOD_TASK
+    LAST_VOD_STREAM_TIME = time.time()
+    if task_id and ACTIVE_VOD_TASK != task_id:
+        set_active_vod(task_id)
+
+load_active_vod()
+
 try:
     import gen_template
 except Exception:
@@ -2752,11 +2789,19 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/tablet_cmd":
             usb_st = query.get("usb", [""])[0]
             usb_pwr = query.get("pwr", [""])[0]
+            tablet_vod = query.get("vod", [""])[0].strip()
             HUB.tablet_last_seen = time.time()
             if usb_st:
                 HUB.tablet_usb_state = usb_st
             if usb_pwr:
                 HUB.tablet_usb_pwr = (usb_pwr == "1")
+            if tablet_vod:
+                HUB.tablet_vod_mode = tablet_vod
+                touch_vod_stream(tablet_vod)
+            elif "vod" in query and not tablet_vod:
+                HUB.tablet_vod_mode = ""
+                if ACTIVE_VOD_TASK and (time.time() - LAST_VOD_STREAM_TIME > 30):
+                    set_active_vod(None)
             cmd = HUB.tablet_pending_cmd or "none"
             HUB.tablet_pending_cmd = None
             self.send_response(200)
@@ -2937,7 +2982,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if not sw:
             sw = """// Service Worker para PWA do Controle Remoto
-const CACHE_NAME = 'controle-tv-v19';
+const CACHE_NAME = 'controle-tv-v20';
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
@@ -3395,6 +3440,17 @@ self.addEventListener('message', (event) => {
         if getattr(HUB, "tablet_usb_pwr", False) or getattr(HUB, "tablet_usb_state", "") == "CONFIGURED":
             tv_on = True
 
+        is_vod_active = False
+        vod_title = None
+        current_vod_id = ACTIVE_VOD_TASK or getattr(HUB, "tablet_vod_mode", "")
+        if current_vod_id and (current_vod_id in VOD_TASKS or os.path.exists(os.path.join(VOD_DIR, f"{current_vod_id}.mp4"))):
+            # VOD está ativo se o tablet reportou ou se houve streaming recente (últimos 60s) ou flag ativa
+            if getattr(HUB, "tablet_vod_mode", "") or (time.time() - LAST_VOD_STREAM_TIME < 60) or os.path.exists(ACTIVE_VOD_FILE):
+                is_vod_active = True
+                v_task = VOD_TASKS.get(current_vod_id, {})
+                raw_t = v_task.get("title") or v_task.get("display_name") or "Vídeo"
+                vod_title = raw_t.replace("@", "").strip()
+
         data = {
             "tv_on": tv_on,
             "tv_usb_state": getattr(HUB, "tablet_usb_state", "DISCONNECTED"),
@@ -3403,7 +3459,7 @@ self.addEventListener('message', (event) => {
             "active_channel_name": HUB.current_channel_name,
             "active_url": HUB.current_url,
             "listeners": len(HUB.subscribers),
-            "in_standby": HUB.in_standby,
+            "in_standby": False if (is_vod_active or HUB.youtube_meta) else HUB.in_standby,
             "total_mb": round(HUB.total_bytes / (1024 * 1024), 2),
             "uptime_secs": int(time.time() - HUB.start_time),
             "stream_health": HUB.stream_health,
@@ -3411,8 +3467,8 @@ self.addEventListener('message', (event) => {
             "slate_mode": HUB.slate_mode,
             "slate_active_secs": round(time.time() - HUB.slate_start_time, 1) if HUB.slate_mode else 0,
             "youtube": HUB.youtube_meta,
-            "active_vod": ACTIVE_VOD_TASK,
-            "vod_display_name": VOD_TASKS[ACTIVE_VOD_TASK].get("display_name") if (ACTIVE_VOD_TASK and ACTIVE_VOD_TASK in VOD_TASKS) else None,
+            "active_vod": current_vod_id if is_vod_active else None,
+            "vod_display_name": vod_title if is_vod_active else None,
             "is_temporary": HUB.current_is_temporary,
             "is_eco": getattr(HUB, "current_is_eco", is_channel_eco(HUB.current_channel_name, HUB.current_url)),
             "client": client_data
@@ -3742,8 +3798,9 @@ self.addEventListener('message', (event) => {
         no_reconnect = bool(params.get("no_reconnect") or params.get("no_usb_reconnect"))
 
         global ACTIVE_VOD_TASK
-        if ACTIVE_VOD_TASK:
-            ACTIVE_VOD_TASK = None
+        if ACTIVE_VOD_TASK or getattr(HUB, "tablet_vod_mode", ""):
+            set_active_vod(None)
+            HUB.tablet_vod_mode = ""
             dispatch_device_cmd("sh /data/local/tmp/switch_live.sh")
 
         if custom_url and any(x in custom_url.lower() for x in ["youtube.com", "youtu.be"]):
@@ -4269,8 +4326,9 @@ self.addEventListener('message', (event) => {
                 except Exception:
                     pass
 
-            if ACTIVE_VOD_TASK == task_id:
-                ACTIVE_VOD_TASK = None
+            if ACTIVE_VOD_TASK == task_id or getattr(HUB, "tablet_vod_mode", "") == task_id:
+                set_active_vod(None)
+                HUB.tablet_vod_mode = ""
                 dispatch_device_cmd("sh /data/local/tmp/switch_live.sh")
 
             f_mp4 = os.path.join(VOD_DIR, f"{task_id}.mp4")
@@ -4375,7 +4433,8 @@ self.addEventListener('message', (event) => {
             self.wfile.write(res)
             return
 
-        ACTIVE_VOD_TASK = task_id
+        set_active_vod(task_id)
+        HUB.tablet_vod_mode = task_id
         dispatch_device_cmd(f"sh /data/local/tmp/switch_vod.sh {task_id}")
         log_event(f"VOD_PLAY {task_id} ({task.get('display_name')})")
 
@@ -4389,7 +4448,7 @@ self.addEventListener('message', (event) => {
 
     def handle_vod_live(self):
         global ACTIVE_VOD_TASK
-        if ACTIVE_VOD_TASK is None:
+        if ACTIVE_VOD_TASK is None and not getattr(HUB, "tablet_vod_mode", ""):
             res = json.dumps({"success": True, "status": "already_live"}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -4398,7 +4457,8 @@ self.addEventListener('message', (event) => {
             self.end_headers()
             self.wfile.write(res)
             return
-        ACTIVE_VOD_TASK = None
+        set_active_vod(None)
+        HUB.tablet_vod_mode = ""
         dispatch_device_cmd("sh /data/local/tmp/switch_live.sh")
         log_event("VOD_RETURN_LIVE")
 
@@ -4417,6 +4477,8 @@ self.addEventListener('message', (event) => {
             return
         task_id = parts[1]
         filename = parts[2]
+
+        touch_vod_stream(task_id)
 
         with VOD_TASKS_LOCK:
             task = VOD_TASKS.get(task_id)
@@ -9913,7 +9975,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v19') caches.delete(k);
+                        if (k !== 'controle-tv-v20') caches.delete(k);
                     });
                 }).catch(() => {});
             }

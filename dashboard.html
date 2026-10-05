@@ -3517,7 +3517,22 @@
                 return;
             }
 
-            if (tvConnectionState === 'waiting') {
+            if (tvConnectionState === 'stream_error') {
+                if (bannerLabel) bannerLabel.innerText = '🔴 FALHA NA TRANSMISSÃO';
+                if (bannerDot) {
+                    bannerDot.style.background = '#ef4444';
+                    bannerDot.style.boxShadow = '0 0 10px #ef4444';
+                    bannerDot.style.animation = 'pulse-dot 1.5s infinite';
+                }
+                bannerTitle.innerText = 'Sinal Instável ou Interrompido';
+                if (bannerSubtext) bannerSubtext.innerText = 'Tentando reconectar automaticamente com a emissora...';
+                if (btnReturnLive) btnReturnLive.style.display = 'none';
+                return;
+            }
+
+            const isPlayingMedia = (activeNowPlayingState.type === 'vod' || activeNowPlayingState.type === 'series' || activeNowPlayingState.type === 'yt');
+
+            if (tvConnectionState === 'waiting' && !isPlayingMedia) {
                 if (bannerLabel) bannerLabel.innerText = '🟡 SINTONIZANDO SINAL NA TV...';
                 if (bannerDot) {
                     bannerDot.style.background = '#f59e0b';
@@ -3525,12 +3540,12 @@
                     bannerDot.style.animation = 'pulse-dot 1.5s infinite';
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || currentActiveName || 'TV ao Vivo';
-                if (bannerSubtext) bannerSubtext.innerText = 'Aguardando entrada de imagem na TV...';
+                if (bannerSubtext) bannerSubtext.innerText = 'Aguardando sincronização do sinal na TV...';
                 if (btnReturnLive) btnReturnLive.style.display = 'none';
                 return;
             }
 
-            if (tvConnectionState === 'standby') {
+            if (tvConnectionState === 'standby' && !isPlayingMedia) {
                 if (bannerLabel) bannerLabel.innerText = '🟡 TV EM MODO DE ESPERA';
                 if (bannerDot) {
                     bannerDot.style.background = '#f59e0b';
@@ -3538,7 +3553,7 @@
                     bannerDot.style.animation = 'pulse-dot 1.5s infinite';
                 }
                 bannerTitle.innerText = 'TV em Espera';
-                if (bannerSubtext) bannerSubtext.innerText = 'Aguardando início de transmissão';
+                if (bannerSubtext) bannerSubtext.innerText = 'Toque em qualquer canal para iniciar a transmissão';
                 if (btnReturnLive) btnReturnLive.style.display = 'none';
                 return;
             }
@@ -5792,11 +5807,13 @@
                 // Atualiza Estado da Conexão da TV
                 if (data.tablet_online && data.tv_on === false) {
                     tvConnectionState = 'tv_off';
-                } else if (data.tablet_online === false && (data.listeners === 0 || !data.listeners)) {
+                } else if (!data.tablet_online && (data.listeners === 0 || !data.listeners) && !data.active_vod) {
                     tvConnectionState = 'tablet_offline';
-                } else if (data.in_standby) {
+                } else if (data.stream_health === 'failed' && !data.active_vod && !data.youtube) {
+                    tvConnectionState = 'stream_error';
+                } else if (data.in_standby && !data.active_vod && !data.youtube) {
                     tvConnectionState = 'standby';
-                } else if (data.client && data.client.last_seen_secs > 20) {
+                } else if (data.client && data.client.last_seen_secs > 25 && !data.active_vod && !data.youtube) {
                     tvConnectionState = 'waiting';
                 } else {
                     tvConnectionState = 'online';
@@ -5816,24 +5833,27 @@
                 } else if (data.active_vod) {
                     const activeTaskObj = (vodTasks || []).find(t => t.id === data.active_vod);
                     let vType = 'vod';
+                    let vTitle = data.vod_display_name;
                     if (activeTaskObj) {
                         if (isYtTask(activeTaskObj)) vType = 'yt';
                         else if (isSeriesTask(activeTaskObj)) vType = 'series';
                         else vType = 'vod';
-                    } else if (data.vod_display_name && (/\bs\d{1,2}e\d{1,2}\b/i.test(data.vod_display_name) || /temporada|epis[oó]dio/i.test(data.vod_display_name))) {
+                        vTitle = activeTaskObj.title || activeTaskObj.display_name || vTitle;
+                    } else if (vTitle && (/\bs\d{1,2}e\d{1,2}\b/i.test(vTitle) || /temporada|epis[oó]dio/i.test(vTitle))) {
                         vType = 'series';
                     }
-                    activeNowPlayingState.type = vType;
-                    if (data.vod_display_name) {
-                        activeNowPlayingState.title = data.vod_display_name;
+                    if (vTitle) {
+                        vTitle = vTitle.replace(/^@\s*/, '').trim();
                     }
+                    activeNowPlayingState = {
+                        type: vType,
+                        title: vTitle || 'Vídeo em Reprodução'
+                    };
                 } else {
-                    if (activeNowPlayingState.type !== 'vod' && activeNowPlayingState.type !== 'series') {
-                        activeNowPlayingState = {
-                            type: 'live',
-                            title: data.active_channel_name || currentActiveName || 'TV ao Vivo'
-                        };
-                    }
+                    activeNowPlayingState = {
+                        type: 'live',
+                        title: data.active_channel_name || currentActiveName || 'TV ao Vivo'
+                    };
                 }
                 renderTvBanner();
 
@@ -6039,7 +6059,7 @@
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v19') caches.delete(k);
+                        if (k !== 'controle-tv-v20') caches.delete(k);
                     });
                 }).catch(() => {});
             }

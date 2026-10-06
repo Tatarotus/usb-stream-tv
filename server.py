@@ -2890,6 +2890,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                 can_copy_video = False
                 streams = meta_info.get("streams", [])
                 v_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+                w, h = 0, 0
                 if v_stream:
                     codec = v_stream.get("codec_name", "").lower()
                     pix = v_stream.get("pix_fmt", "").lower()
@@ -2926,7 +2927,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     with VOD_TASKS_LOCK:
                         task["status_msg"] = "Transcodificando para H.264 Samsung TV..."
                         task["progress"] = 10
-                    if w > 1920 or h > 1080:
+                    if (w > 1920 or h > 1080) or (w == 0 or h == 0):
                         scale_vf = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
                     else:
                         scale_vf = "scale='min(1920,iw)':-2"

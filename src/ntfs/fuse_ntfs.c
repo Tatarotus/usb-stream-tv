@@ -67,6 +67,10 @@ static uint64_t g_last_file_read_ms = 0;
 static uint64_t g_last_tv_stream_pos = 0;
 static uint64_t g_anchor_foff = (uint64_t)-1;
 static uint64_t g_anchor_stream_pos = 0;
+static uint64_t g_anchor_birth_ms = 0;
+static uint64_t g_probe_seq_end = (uint64_t)-1;
+static int g_probe_consecutive_count = 0;
+static uint64_t g_probe_accumulated_bytes = 0;
 
 static inline uint64_t foff_to_stream_pos(uint64_t foff) {
     if (g_anchor_foff == (uint64_t)-1) {
@@ -394,6 +398,12 @@ static void __attribute__((unused)) randomize_volume_serial(void) {
 }
 
 
+static inline void reset_probe_state(void) {
+    g_probe_seq_end = (uint64_t)-1;
+    g_probe_consecutive_count = 0;
+    g_probe_accumulated_bytes = 0;
+}
+
 static void on_open(void) {
     pthread_mutex_lock(&g_mu);
     if (g_test_pattern_mode) {
@@ -413,6 +423,8 @@ static void on_open(void) {
     g_base_valid = 0;
     g_prev_Fend = (uint64_t)-1;
     g_last_file_read_ms = now_ms();
+    g_anchor_birth_ms = now_ms();
+    reset_probe_state();
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -445,9 +457,6 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
      * Check if this read is a continuation of the active sequential playback.
      * Any distant non-sequential read (>= 8 MB) MUST return standard MPEG-TS NULL packets
      * immediately WITHOUT corrupting playback anchor or incrementing epoch! */
-    static uint64_t g_probe_seq_end = (uint64_t)-1;
-    static int g_probe_consecutive_count = 0;
-
     int is_seq_read = (g_prev_Fend != (uint64_t)-1 &&
                        (foff == g_prev_Fend ||
                         (foff > g_prev_Fend && foff - g_prev_Fend <= 262144) ||
@@ -457,17 +466,30 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
     if (!is_seq_read) {
         if (g_probe_seq_end != (uint64_t)-1 && foff == g_probe_seq_end) {
             g_probe_consecutive_count++;
+            g_probe_accumulated_bytes += c;
             g_probe_seq_end = foff + c;
         } else {
             g_probe_consecutive_count = 1;
+            g_probe_accumulated_bytes = c;
             g_probe_seq_end = foff + c;
         }
     } else {
         g_probe_consecutive_count = 0;
+        g_probe_accumulated_bytes = 0;
         g_probe_seq_end = (uint64_t)-1;
     }
 
-    int is_confirmed_jump = (!is_seq_read && g_probe_consecutive_count >= 3);
+    /* Opening grace period: In the first 10 seconds of playback or while streaming near start (foff <= 4MB),
+     * ConnectShare probes distant offsets (e.g. 800MB) for container atoms / index metadata.
+     * Forward jumps to foff >= 8MB during grace period are ALWAYS probes and MUST NOT re-anchor! */
+    int is_opening_grace = (g_anchor_birth_ms != 0 && (now - g_anchor_birth_ms < 10000ULL) && g_anchor_foff <= 4ULL * 1024 * 1024);
+
+    /* Volume check: A real user seek/jump reads multiple full blocks (>= 4 blocks AND >= 1 MB).
+     * ConnectShare's transient metadata probes (16KB, 32KB, 64KB, 128KB = ~368KB total) never reach 1 MB. */
+    int is_confirmed_jump = (!is_seq_read &&
+                             !is_opening_grace &&
+                             g_probe_consecutive_count >= 4 &&
+                             g_probe_accumulated_bytes >= 1ULL * 1024 * 1024);
 
     uint64_t s_probe = foff_to_stream_pos(foff);
     int is_future_probe = (s_probe >= g_s_write + 2ULL * 1024 * 1024 && !is_seq_read);
@@ -492,9 +514,10 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
             is_reopen = 1;
         }
     } else if (is_confirmed_jump) {
-        /* Confirmed seek / bookmark jump (3+ consecutive blocks): re-anchor to live target */
+        /* Confirmed seek / bookmark jump (>= 4 blocks AND >= 1 MB outside grace): re-anchor to live target */
         is_reopen = 1;
         g_probe_consecutive_count = 0;
+        g_probe_accumulated_bytes = 0;
         g_probe_seq_end = (uint64_t)-1;
     }
 
@@ -518,6 +541,7 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
                 g_last_tv_stream_pos = snapped_abs;
                 g_base_valid = 1;
                 g_prev_Fend = (uint64_t)-1;
+                g_anchor_birth_ms = now;
                 s_last_pace_ms = 0;
                 size_t c_h = 65536;
                 if (c_h > HDRCACHESZ) c_h = HDRCACHESZ;
@@ -541,6 +565,7 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
     g_last_file_read_ms = now;
 
     size_t fo = 0;
+    int delivered_real_video = 0;
 
     while (fo < c) {
         uint64_t F = foff + (uint64_t)fo;
@@ -557,6 +582,7 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
             size_t hc = (size_t)(g_hcache_len - F);
             if (hc > cc) hc = cc;
             memcpy(dst + fo, g_hcache + F, hc);
+            delivered_real_video = 1;
             fo += hc;
             continue;
         }
@@ -576,6 +602,7 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
                 g_anchor_foff = F;
                 g_anchor_stream_pos = snapped_abs;
                 g_epoch++;
+                g_hcache_len = 0;
                 s_last_pace_ms = 0;
                 start = snapped_abs;
                 fprintf(stderr, "[FUSE] Re-anchored ring wrap at F=%llu -> stream_pos=%llu (S_write=%llu)\n",
@@ -655,14 +682,14 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
         size_t avail = (size_t)(g_s_write - start);
         if (avail > cc) avail = cc;
         ring_copy(dst + fo, start, avail);
+        delivered_real_video = 1;
         fo += avail;
     }
 
-    if (g_base_valid) {
+    if (g_base_valid && delivered_real_video) {
         g_last_tv_stream_pos = foff_to_stream_pos(foff + c);
         g_prev_Fend = foff + c;
-        g_probe_consecutive_count = 0;
-        g_probe_seq_end = (uint64_t)-1;
+        reset_probe_state();
     }
 }
 
@@ -908,6 +935,8 @@ void ntfs_serve_disk(uint8_t *dst, uint64_t disk_offset, size_t n, uint64_t dead
                         g_anchor_foff = (uint64_t)-1;
                         g_anchor_stream_pos = 0;
                         g_prev_Fend = (uint64_t)-1;
+                        g_anchor_birth_ms = now_sw;
+                        reset_probe_state();
                         pthread_cond_broadcast(&g_cv);
                     }
                 }
@@ -1024,6 +1053,8 @@ static void *feeder_thread(void *arg) {
                 g_have_data = 0;
                 g_prev_Fend = (uint64_t)-1;
                 g_hcache_len = 0;
+                g_anchor_birth_ms = now_ms();
+                reset_probe_state();
                 pthread_cond_broadcast(&g_cv);
                 pthread_mutex_unlock(&g_mu);
 

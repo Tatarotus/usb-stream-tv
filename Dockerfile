@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     fonts-dejavu-core \
     quickjs \
+    aria2 \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir yt-dlp
 
@@ -14,6 +15,7 @@ WORKDIR /app
 
 # Copy application files
 COPY server.py ./
+COPY torrent_downloader.py ./
 COPY channels.json ./
 COPY generate_slate.sh ./
 COPY dashboard.html ./

@@ -2465,16 +2465,19 @@
                     </button>
                 </div>
 
-                <!-- Gaveta do YouTube (Oculta por padrão para não confundir o idoso) -->
+                <!-- Gaveta do YouTube e Torrent (Oculta por padrão para não confundir o idoso) -->
                 <div id="saved-yt-drawer" style="display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.12);">
                     <div style="font-size: 15px; font-weight: 800; color: var(--gold); margin-bottom: 8px;">
-                        Assistir ou Salvar Vídeo do YouTube na TV:
+                        Assistir YouTube ou Baixar Torrent (Magnet) na TV:
                     </div>
                     <div class="search-box-wrapper">
-                        <input id="yt-url-input" class="senior-search-input" type="text"
-                               placeholder="Cole o link do YouTube aqui..."
+                        <input id="yt-url-input" class="senior-search-input yt-url-input-field" type="text"
+                               placeholder="Cole o link do YouTube ou Magnet Link do Torrent..."
                                oninput="onYtInput(this.value)" autocomplete="off">
                         <button id="yt-clear-btn" class="btn-clear-search" onclick="clearYtInput()" style="display: none;" title="Limpar">✕</button>
+                    </div>
+                    <div id="yt-torrent-badge" style="display: none; margin-top: 8px; font-size: 13px; font-weight: 800; color: #38bdf8; background: rgba(2,132,199,0.18); border: 1px solid #38bdf8; border-radius: 8px; padding: 6px 12px;">
+                        🧲 Link Magnet/Torrent Detectado! Toque em 'Salvar na TV' para download com legendas PT-BR.
                     </div>
                     <div class="yt-actions-row" style="margin-top: 10px;">
                         <button id="btn-yt-live" class="btn-yt-action btn-yt-live" onclick="playYouTubeLive()">
@@ -2644,23 +2647,26 @@
             <!-- Corpo Rolável da Gaveta -->
             <div class="downloads-modal-body">
 
-                <!-- Bloco 1: Assistir ou Baixar do YouTube na TV -->
+                <!-- Bloco 1: Assistir ou Baixar do YouTube / Torrent na TV -->
                 <div class="yt-section-card">
                     <div class="yt-header-row">
-                        <span style="font-size: 26px;">▶️</span>
-                        <div class="yt-header-title">Assistir Vídeo ou Música do YouTube na TV:</div>
+                        <span style="font-size: 26px;">🌐</span>
+                        <div class="yt-header-title">Assistir YouTube ou Baixar Torrent na TV:</div>
                     </div>
                     <div class="search-box-wrapper">
-                        <input id="yt-url-input" class="senior-search-input" type="text"
-                               placeholder="Cole o link do YouTube aqui (ex: https://youtu.be/...)"
+                        <input id="modal-yt-url-input" class="senior-search-input yt-url-input-field" type="text"
+                               placeholder="Cole o link do YouTube ou Magnet Link aqui..."
                                oninput="onYtInput(this.value)" autocomplete="off">
-                        <button id="yt-clear-btn" class="btn-clear-search" onclick="clearYtInput()" style="display: none;" title="Limpar link">✕</button>
+                        <button id="modal-yt-clear-btn" class="btn-clear-search" onclick="clearYtInput()" style="display: none;" title="Limpar link">✕</button>
+                    </div>
+                    <div id="modal-yt-torrent-badge" style="display: none; margin-top: 8px; font-size: 13px; font-weight: 800; color: #38bdf8; background: rgba(2,132,199,0.18); border: 1px solid #38bdf8; border-radius: 8px; padding: 6px 12px;">
+                        🧲 Link Magnet/Torrent Detectado! Toque em 'Salvar no Cinema' para download com legendas PT-BR.
                     </div>
                     <div class="yt-actions-row">
-                        <button id="btn-yt-live" class="btn-yt-action btn-yt-live" onclick="playYouTubeLive()">
+                        <button id="modal-btn-yt-live" class="btn-yt-action btn-yt-live" onclick="playYouTubeLive()">
                             ▶️ ASSISTIR AGORA NA TV
                         </button>
-                        <button id="btn-yt-save" class="btn-yt-action btn-yt-save" onclick="saveYouTubeVod()">
+                        <button id="modal-btn-yt-save" class="btn-yt-action btn-yt-save" onclick="saveYouTubeVod()">
                             📥 SALVAR NO CINEMA (COM PAUSA)
                         </button>
                     </div>
@@ -3392,6 +3398,7 @@
                 if (tabLive) { tabLive.classList.add('active'); tabLive.setAttribute('aria-selected', 'true'); }
                 if (secLive) secLive.style.display = 'flex';
             }
+            renderTvBanner();
             updatePaginationUI();
 
             if (doScroll) {
@@ -3559,6 +3566,9 @@
             }
 
             // 2. Estados normais de transmissão
+            const isMediaActive = (activeNowPlayingState.type === 'series' || activeNowPlayingState.type === 'vod' || activeNowPlayingState.type === 'yt');
+            const showReturnLive = isMediaActive && (currentAppMode === 'live');
+
             if (activeNowPlayingState.type === 'series') {
                 if (bannerLabel) bannerLabel.innerText = '🟢 TRANSMITINDO NA TV: SÉRIE';
                 if (bannerDot) {
@@ -3568,7 +3578,7 @@
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || 'Episódio da Série';
                 if (bannerSubtext) bannerSubtext.innerText = 'Episódio em reprodução na TV';
-                if (btnReturnLive) btnReturnLive.style.display = 'flex';
+                if (btnReturnLive) btnReturnLive.style.display = showReturnLive ? 'flex' : 'none';
             } else if (activeNowPlayingState.type === 'vod') {
                 if (bannerLabel) bannerLabel.innerText = '🟢 TRANSMITINDO NA TV: FILME';
                 if (bannerDot) {
@@ -3578,7 +3588,7 @@
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || 'Filme em Reprodução';
                 if (bannerSubtext) bannerSubtext.innerText = 'Filme em reprodução na TV';
-                if (btnReturnLive) btnReturnLive.style.display = 'flex';
+                if (btnReturnLive) btnReturnLive.style.display = showReturnLive ? 'flex' : 'none';
             } else if (activeNowPlayingState.type === 'yt') {
                 if (bannerLabel) bannerLabel.innerText = '▶️ TRANSMITINDO NA TV: YOUTUBE';
                 if (bannerDot) {
@@ -3588,7 +3598,7 @@
                 }
                 bannerTitle.innerText = activeNowPlayingState.title || 'Vídeo do YouTube';
                 if (bannerSubtext) bannerSubtext.innerText = 'Vídeo do YouTube em reprodução na TV';
-                if (btnReturnLive) btnReturnLive.style.display = 'flex';
+                if (btnReturnLive) btnReturnLive.style.display = showReturnLive ? 'flex' : 'none';
             } else {
                 // Modo TV ao Vivo
                 if (bannerLabel) bannerLabel.innerText = '🟢 TRANSMITINDO NA TV: AO VIVO';
@@ -3646,6 +3656,14 @@
             renderSavedShelf();
         }
 
+        function isTorrentTask(task) {
+            if (!task) return false;
+            const url = (task.url || '').toLowerCase();
+            const title = (task.title || task.display_name || '').toLowerCase();
+            const msg = (task.status_msg || '').toLowerCase();
+            return url.startsWith('magnet:?') || url.includes('.torrent') || title.includes('[torrent]') || msg.includes('torrent') || msg.includes('bittorrent');
+        }
+
         function isSeriesTask(task) {
             if (!task) return false;
             if (task.series_id) return true;
@@ -3656,14 +3674,14 @@
         }
 
         function isYtTask(task) {
-            if (!task) return false;
+            if (!task || isTorrentTask(task)) return false;
             const url = (task.url || '').toLowerCase();
             return url.includes('youtube.com') || url.includes('youtu.be') || (task.title && task.title.toLowerCase().includes('youtube'));
         }
 
         function isMovieTask(task) {
             if (!task) return false;
-            return !isSeriesTask(task) && !isYtTask(task);
+            return !isSeriesTask(task) && !isYtTask(task) && !isTorrentTask(task);
         }
 
         function findTaskForEpisode(ep) {
@@ -3803,6 +3821,7 @@
             const seriesCount = readyTasks.filter(isSeriesTask).length;
             const moviesCount = readyTasks.filter(isMovieTask).length;
             const ytCount = readyTasks.filter(isYtTask).length;
+            const torrentCount = readyTasks.filter(isTorrentTask).length;
 
             const btnAll = document.getElementById('filter-saved-all');
             const btnSeries = document.getElementById('filter-saved-series');
@@ -3813,7 +3832,7 @@
             if (btnAll) btnAll.innerText = `⭐ Todos (${allCount})`;
             if (btnSeries) btnSeries.innerText = `🍿 Séries (${seriesCount})`;
             if (btnMovies) btnMovies.innerText = `🎬 Filmes (${moviesCount})`;
-            if (btnYt) btnYt.innerText = `▶️ YouTube (${ytCount})`;
+            if (btnYt) btnYt.innerText = `🌐 Web / Torrent (${ytCount + torrentCount})`;
             if (tabSavedText) tabSavedText.innerText = allCount > 0 ? `💾 SALVOS (${allCount})` : '💾 SALVOS';
 
             // 1. Renderiza Fila de Downloads Ativos e Falhas
@@ -3833,7 +3852,9 @@
                     const speed = task.speed ? escapeHtml(task.speed) : '';
 
                     let routeHtml = '';
-                    if (isYtTask(task)) {
+                    if (isTorrentTask(task)) {
+                        routeHtml = `<span class="badge-route" style="background:#0284c7; border-color:#38bdf8;">🧲 BitTorrent P2P</span>`;
+                    } else if (isYtTask(task)) {
                         routeHtml = `<span class="badge-route badge-yt">▶️ Vídeo do YouTube</span>`;
                     } else if (isSeriesTask(task)) {
                         routeHtml = `<span class="badge-route" style="background:#7c3aed; border-color:#a78bfa;">🍿 Episódio de Série</span>`;
@@ -3843,7 +3864,7 @@
                         routeHtml = `<span class="badge-route badge-direct">⚡ Download Direto Rápido</span>`;
                     }
 
-                    const fallbackIcon = isSeriesTask(task) ? '🍿' : (isYtTask(task) ? '▶️' : '🎬');
+                    const fallbackIcon = isTorrentTask(task) ? '🧲' : (isSeriesTask(task) ? '🍿' : (isYtTask(task) ? '▶️' : '🎬'));
                     const posterImg = task.poster 
                         ? `<img class="vod-poster-thumb" src="${escapeHtml(task.poster)}" alt="" onerror="this.outerHTML='<div class=\\'vod-poster-thumb\\'>${fallbackIcon}</div>'">`
                         : `<div class="vod-poster-thumb">${fallbackIcon}</div>`;
@@ -3919,7 +3940,7 @@
             } else if (savedFilter === 'movies') {
                 filteredTasks = readyTasks.filter(isMovieTask);
             } else if (savedFilter === 'yt') {
-                filteredTasks = readyTasks.filter(isYtTask);
+                filteredTasks = readyTasks.filter(t => isYtTask(t) || isTorrentTask(t));
             }
 
             // 3. Renderiza Prateleira de Prontos na Grade de 2 Colunas
@@ -3944,7 +3965,7 @@
                 let filterName = 'itens correspondentes';
                 if (savedFilter === 'series') filterName = 'séries salvas';
                 else if (savedFilter === 'movies') filterName = 'filmes salvos';
-                else if (savedFilter === 'yt') filterName = 'vídeos do YouTube';
+                else if (savedFilter === 'yt') filterName = 'vídeos da Web e Torrents';
 
                 emptyHtml = `
                     <div style="text-align: center; padding: 28px 14px; background: var(--surface); border: 2px dashed var(--border); border-radius: var(--btn-radius); color: var(--text-muted); font-size: 16px; line-height: 1.5; grid-column: 1 / -1;">
@@ -3967,12 +3988,15 @@
                 let rawTitle = (task.title || task.display_name || 'Vídeo').trim().replace(/^@\s*/, '');
                 const title = escapeHtml(rawTitle);
                 const safeId = escapeHtml(task.id);
+                const isTor = isTorrentTask(task);
                 const isYt = isYtTask(task);
                 const isSeries = isSeriesTask(task);
 
                 let badgeHtml = '';
                 if (isPlaying) {
                     badgeHtml = `<span class="vod-grid-badge live-active">● NO AR NA TV</span>`;
+                } else if (isTor) {
+                    badgeHtml = `<span class="vod-grid-badge" style="background:#0284c7; border-color:#38bdf8;">🧲 TORRENT</span>`;
                 } else if (isYt) {
                     badgeHtml = `<span class="vod-grid-badge" style="background:#ef4444; border-color:#f87171;">▶️ YOUTUBE</span>`;
                 } else if (isSeries) {
@@ -3997,7 +4021,7 @@
                     }
                 }
 
-                const fallbackIcon = isSeries ? '🍿' : (isYt ? '▶️' : '🎬');
+                const fallbackIcon = isTor ? '🧲' : (isSeries ? '🍿' : (isYt ? '▶️' : '🎬'));
                 const posterImg = task.poster 
                     ? `<img class="vod-grid-poster-img" src="${escapeHtml(task.poster)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=\\'vod-grid-poster-fallback\\'>${fallbackIcon}</div>'">`
                     : `<div class="vod-grid-poster-fallback">${fallbackIcon}</div>`;
@@ -4145,15 +4169,20 @@
                 }
             }
 
-            const urlLower = (task.url || '').toLowerCase();
-            const isYt = urlLower.includes('youtube.com') || urlLower.includes('youtu.be') || fullTitle.toLowerCase().includes('youtube');
-            const isSeries = Boolean(epInfo) || fullTitle.includes(' - ') || fullTitle.toLowerCase().includes('temporada') || fullTitle.toLowerCase().includes('episodio') || fullTitle.toLowerCase().includes('ep ');
+            const isTor = isTorrentTask(task);
+            const isYt = !isTor && (urlLower.includes('youtube.com') || urlLower.includes('youtu.be') || fullTitle.toLowerCase().includes('youtube'));
+            const isSeries = !isTor && (Boolean(epInfo) || fullTitle.includes(' - ') || fullTitle.toLowerCase().includes('temporada') || fullTitle.toLowerCase().includes('episodio') || fullTitle.toLowerCase().includes('ep '));
 
             if (badgeEl) {
                 if (task.id === activeVodTask) {
                     badgeEl.className = 'badge-route badge-direct';
                     badgeEl.style.background = '#22c55e';
                     badgeEl.innerText = '● NO AR NA TV';
+                } else if (isTor) {
+                    badgeEl.className = 'badge-route';
+                    badgeEl.style.background = '#0284c7';
+                    badgeEl.style.borderColor = '#38bdf8';
+                    badgeEl.innerText = '🧲 BITTORRENT (COM LEGENDA)';
                 } else if (isYt) {
                     badgeEl.className = 'badge-route badge-yt';
                     badgeEl.style.background = '';
@@ -4346,34 +4375,65 @@
             } catch (err) {}
         }
 
-        // ==================== AÇÕES E CONTROLES DO YOUTUBE ====================
+        // ==================== AÇÕES E CONTROLES DO YOUTUBE E TORRENT ====================
 
         function onYtInput(val) {
-            const clearBtn = document.getElementById('yt-clear-btn');
-            if (clearBtn) {
-                clearBtn.style.display = (val && val.trim().length > 0) ? 'block' : 'none';
+            const v = (val || '').trim();
+            const isTor = v.toLowerCase().startsWith('magnet:?') || v.toLowerCase().endsWith('.torrent');
+
+            document.querySelectorAll('.yt-url-input-field').forEach(inp => {
+                if (inp.value !== val) inp.value = val;
+            });
+
+            const clearBtns = [document.getElementById('yt-clear-btn'), document.getElementById('modal-yt-clear-btn')];
+            clearBtns.forEach(b => { if (b) b.style.display = (v.length > 0) ? 'block' : 'none'; });
+
+            const torBadges = [document.getElementById('yt-torrent-badge'), document.getElementById('modal-yt-torrent-badge')];
+            torBadges.forEach(b => { if (b) b.style.display = isTor ? 'block' : 'none'; });
+
+            const liveBtns = [document.getElementById('btn-yt-live'), document.getElementById('modal-btn-yt-live')];
+            const saveBtns = [document.getElementById('btn-yt-save'), document.getElementById('modal-btn-yt-save')];
+
+            if (isTor) {
+                liveBtns.forEach(b => { if (b) { b.innerText = '⚠️ TORRENT: SALVAR ABAIXO'; b.style.opacity = '0.7'; } });
+                saveBtns.forEach(b => { if (b) { b.innerText = '📥 BAIXAR TORRENT COM LEGENDA NA TV'; b.style.boxShadow = '0 0 14px rgba(34,197,94,0.6)'; } });
+            } else {
+                liveBtns.forEach(b => { if (b) { b.innerText = '▶️ ASSISTIR AGORA NA TV'; b.style.opacity = '1'; } });
+                saveBtns.forEach(b => { if (b) { b.innerText = '📥 SALVAR NA TV (COM PAUSA)'; b.style.boxShadow = ''; } });
             }
         }
 
         function clearYtInput() {
             triggerHaptic();
-            const input = document.getElementById('yt-url-input');
-            if (input) {
-                input.value = '';
-                input.focus();
+            document.querySelectorAll('.yt-url-input-field').forEach(inp => {
+                inp.value = '';
+            });
+            onYtInput('');
+            const inp = document.querySelector('.yt-url-input-field');
+            if (inp) inp.focus();
+        }
+
+        function getYtInputValue() {
+            const inputs = document.querySelectorAll('.yt-url-input-field');
+            for (const inp of inputs) {
+                if (inp && inp.value && inp.value.trim().length > 0) return inp.value.trim();
             }
-            const clearBtn = document.getElementById('yt-clear-btn');
-            if (clearBtn) clearBtn.style.display = 'none';
+            const fallback = document.getElementById('yt-url-input');
+            return fallback ? fallback.value.trim() : '';
         }
 
         async function playYouTubeLive() {
             triggerHaptic();
             requestNotificationPermission();
-            const input = document.getElementById('yt-url-input');
-            const url = input ? input.value.trim() : '';
+            const url = getYtInputValue();
             if (!url) {
-                showActionBanner(`Por favor, cole o link do YouTube no campo acima.`, 'warn');
-                if (input) input.focus();
+                showActionBanner(`Por favor, cole o link do YouTube ou Torrent no campo acima.`, 'warn');
+                const inp = document.querySelector('.yt-url-input-field');
+                if (inp) inp.focus();
+                return;
+            }
+            if (url.toLowerCase().startsWith('magnet:?') || url.toLowerCase().endsWith('.torrent')) {
+                showActionBanner(`Torrents precisam ser baixados primeiro para a TV. Toque no botão verde 'Salvar na TV' para iniciar o download com legendas PT-BR.`, 'warn');
                 return;
             }
             const pin = getAuthPin();
@@ -4387,9 +4447,7 @@
                 const data = await res.json();
                 if (data.success) {
                     showActionBanner(`✓ Passando na TV: <strong>${escapeHtml(data.title || 'Vídeo do YouTube')}</strong>!`, 'success');
-                    if (input) input.value = '';
-                    const clearBtn = document.getElementById('yt-clear-btn');
-                    if (clearBtn) clearBtn.style.display = 'none';
+                    clearYtInput();
                     pollStatus();
                 } else {
                     showActionBanner(`Não foi possível reproduzir: ${escapeHtml(data.error || 'Erro no YouTube')}`, 'warn');
@@ -4402,30 +4460,34 @@
         async function saveYouTubeVod() {
             triggerHaptic();
             requestNotificationPermission();
-            const input = document.getElementById('yt-url-input');
-            const url = input ? input.value.trim() : '';
+            const url = getYtInputValue();
             if (!url) {
-                showActionBanner(`Por favor, cole o link do YouTube no campo acima.`, 'warn');
-                if (input) input.focus();
+                showActionBanner(`Por favor, cole o link do YouTube ou Torrent no campo acima.`, 'warn');
+                const inp = document.querySelector('.yt-url-input-field');
+                if (inp) inp.focus();
                 return;
             }
+            const isTor = url.toLowerCase().startsWith('magnet:?') || url.toLowerCase().endsWith('.torrent');
             const pin = getAuthPin();
-            showActionBanner(`Preparando vídeo do YouTube para salvar no Cinema da TV...`);
+            if (isTor) {
+                showActionBanner(`🧲 Conectando ao enxame Torrent para salvar no Cinema da TV...`);
+            } else {
+                showActionBanner(`Preparando vídeo do YouTube para salvar no Cinema da TV...`);
+            }
             try {
                 const res = await fetch('/api/vod/prepare', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-Auth-PIN': pin },
-                    body: JSON.stringify({ url: url, title: 'Vídeo do YouTube', pin: pin })
+                    body: JSON.stringify({ url: url, title: isTor ? '' : 'Vídeo do YouTube', pin: pin })
                 });
                 const data = await res.json();
                 if (data.success) {
-                    showActionBanner(`✓ Vídeo adicionado à fila do Cinema! Acompanhe o progresso acima.`, 'success');
-                    if (input) input.value = '';
-                    const clearBtn = document.getElementById('yt-clear-btn');
-                    if (clearBtn) clearBtn.style.display = 'none';
+                    const msg = isTor ? `✓ Torrent adicionado! O download e as legendas estão sendo preparados para a TV.` : `✓ Vídeo adicionado à fila do Cinema! Acompanhe o progresso acima.`;
+                    showActionBanner(msg, 'success');
+                    clearYtInput();
                     pollVodStatus();
                 } else {
-                    showActionBanner(`Não foi possível salvar o vídeo: ${escapeHtml(data.error || 'Erro')}`, 'warn');
+                    showActionBanner(`Não foi possível salvar: ${escapeHtml(data.error || 'Erro')}`, 'warn');
                 }
             } catch (err) {
                 showActionBanner(`Erro de conexão ao salvar vídeo.`, 'warn');
@@ -6077,7 +6139,7 @@
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v20') caches.delete(k);
+                        if (k !== 'controle-tv-v22') caches.delete(k);
                     });
                 }).catch(() => {});
             }

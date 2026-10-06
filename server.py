@@ -2506,12 +2506,132 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
         out_file = os.path.join(VOD_DIR, f"{task_id}.mp4")
         out_tmpl = os.path.join(VOD_DIR, f"{task_id}.bin")
 
-        is_yt = any(x in url.lower() for x in ["youtube.com", "youtu.be"])
+        is_torrent = False
+        try:
+            from torrent_downloader import (
+                is_torrent_url, extract_torrent_title, run_aria2_download,
+                find_main_video_file, find_and_prepare_subtitle, is_audio_portuguese,
+                can_stream_copy_video, build_ffmpeg_transcode_command
+            )
+            is_torrent = is_torrent_url(url)
+        except Exception as e:
+            print(f"[*] Importação torrent_downloader: {e}")
+            is_torrent = url.strip().lower().startswith("magnet:?") or url.strip().lower().endswith(".torrent")
+
+        is_yt = any(x in url.lower() for x in ["youtube.com", "youtu.be"]) if not is_torrent else False
         clean_title = title or task.get("title") or "Filme VOD"
         duration = 0
 
         try:
-            if is_yt:
+            if is_torrent:
+                if (not title or title in ("Filme VOD", "Vídeo VOD", "Vídeo")):
+                    clean_title = extract_torrent_title(url, fallback=clean_title)
+
+                fat_name_preview = format_fat_media_name(clean_title)
+                with VOD_TASKS_LOCK:
+                    task["title"] = clean_title
+                    task["display_name"] = fat_name_preview
+                    task["poster"] = poster or task.get("poster", "")
+                    task["progress"] = 5
+                    task["status_msg"] = "Conectando ao enxame BitTorrent (DHT/P2P)..."
+                    save_vod_tasks()
+
+                torrent_dir = os.path.join(VOD_DIR, f"torrent_{task_id}")
+                work_dir = os.path.join(VOD_DIR, f"work_{task_id}")
+                os.makedirs(torrent_dir, exist_ok=True)
+                os.makedirs(work_dir, exist_ok=True)
+
+                print(f"[VOD] Iniciando download torrent via aria2c: '{clean_title}'...")
+                ok = run_aria2_download(
+                    magnet_url=url,
+                    download_dir=torrent_dir,
+                    task_dict=task,
+                    task_lock=VOD_TASKS_LOCK,
+                    running_procs_dict=VOD_RUNNING_PROCS,
+                    task_id=task_id
+                )
+                if not ok:
+                    with VOD_TASKS_LOCK:
+                        if task_id not in VOD_TASKS or task.get("status") == "cancelled":
+                            print(f"[VOD] Download torrent cancelado para {task_id}.")
+                            return
+                    raise RuntimeError("Download do torrent via aria2c falhou ou foi abortado")
+
+                main_video = find_main_video_file(torrent_dir)
+                if not main_video:
+                    raise RuntimeError("Nenhum arquivo de vídeo suportado encontrado no torrent baixado")
+
+                with VOD_TASKS_LOCK:
+                    task["progress"] = 50
+                    task["status_msg"] = "Localizando legendas em Português e analisando áudio..."
+                    save_vod_tasks()
+
+                sub_file = find_and_prepare_subtitle(main_video, torrent_dir, work_dir)
+                is_pt_audio = is_audio_portuguese(main_video)
+
+                try:
+                    probe_out = subprocess.check_output([
+                        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1", main_video
+                    ], text=True).strip()
+                    duration = float(probe_out)
+                except Exception:
+                    duration = 0
+
+                can_copy = (sub_file is None) and is_pt_audio and can_stream_copy_video(main_video)
+                cmd = build_ffmpeg_transcode_command(main_video, out_file, sub_file, can_copy)
+
+                with VOD_TASKS_LOCK:
+                    if sub_file:
+                        task["status_msg"] = "Gravando legenda PT-BR (hardsub) em 1080p H.264/AC-3..."
+                    elif can_copy:
+                        task["status_msg"] = "Áudio PT detectado! Cópia de vídeo direta sem perda (-c:v copy)..."
+                    else:
+                        task["status_msg"] = "Codificando 1080p H.264 High Profile + AC-3 Samsung..."
+                    task["progress"] = 52
+                    save_vod_tasks()
+
+                print(f"[VOD] Executando FFmpeg Samsung MStar para torrent '{clean_title}' (hardsub={bool(sub_file)}, copy={can_copy})...")
+                proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True, preexec_fn=_vod_subproc_setup)
+                with VOD_RUNNING_PROCS_LOCK:
+                    VOD_RUNNING_PROCS[task_id] = proc
+
+                time_pat = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
+                spd_pat = re.compile(r"speed=\s*([\d\.]+)x")
+                err_lines = []
+                for line in proc.stderr:
+                    err_lines.append(line.strip())
+                    if len(err_lines) > 20:
+                        err_lines.pop(0)
+                    m = time_pat.search(line)
+                    m_spd = spd_pat.search(line)
+                    if m:
+                        hrs, mins, secs = int(m.group(1)), int(m.group(2)), float(m.group(3))
+                        cur_secs = hrs * 3600 + mins * 60 + secs
+                        if duration > 0:
+                            pct = min(98, max(52, int(52 + (cur_secs / duration) * 46)))
+                        else:
+                            pct = min(95, 52 + int(cur_secs / 30))
+                        with VOD_TASKS_LOCK:
+                            if task_id not in VOD_TASKS:
+                                break
+                            task["progress"] = pct
+                            if m_spd:
+                                task["speed"] = f"{m_spd.group(1)}x"
+                proc.wait()
+                with VOD_RUNNING_PROCS_LOCK:
+                    VOD_RUNNING_PROCS.pop(task_id, None)
+
+                try:
+                    shutil.rmtree(torrent_dir, ignore_errors=True)
+                    shutil.rmtree(work_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+                if proc.returncode != 0:
+                    err_snippet = " ".join([l for l in err_lines if "error" in l.lower() or "failed" in l.lower()][-3:])
+                    raise RuntimeError(f"FFmpeg falhou ({proc.returncode}): {err_snippet or 'erro na conversão'}")
+            elif is_yt:
                 if "/live/" in url.lower():
                     with VOD_TASKS_LOCK:
                         if task_id in VOD_TASKS:
@@ -3215,7 +3335,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if not sw:
             sw = """// Service Worker para PWA do Controle Remoto
-const CACHE_NAME = 'controle-tv-v20';
+const CACHE_NAME = 'controle-tv-v22';
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
@@ -4117,7 +4237,18 @@ self.addEventListener('message', (event) => {
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(json.dumps({"success": False, "error": "URL do YouTube não fornecida"}).encode("utf-8"))
+            self.wfile.write(json.dumps({"success": False, "error": "URL não fornecida"}).encode("utf-8"))
+            return
+
+        if yt_url.lower().startswith("magnet:?") or yt_url.lower().endswith(".torrent"):
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "success": False,
+                "error": "Torrents e Magnet Links precisam ser baixados primeiro para a TV. Use o botão verde 'Salvar no Cinema' para iniciar o download e processamento das legendas."
+            }).encode("utf-8"))
             return
 
         try:
@@ -4473,6 +4604,13 @@ self.addEventListener('message', (event) => {
                 self.end_headers()
                 self.wfile.write(res)
                 return
+
+            if not title and (url.lower().startswith("magnet:?") or url.lower().endswith(".torrent")):
+                try:
+                    from torrent_downloader import extract_torrent_title
+                    title = extract_torrent_title(url)
+                except Exception:
+                    pass
 
             VOD_TASKS[task_id] = {
                 "id": task_id,
@@ -10253,7 +10391,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v20') caches.delete(k);
+                        if (k !== 'controle-tv-v22') caches.delete(k);
                     });
                 }).catch(() => {});
             }

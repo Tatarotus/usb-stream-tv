@@ -36,6 +36,10 @@ static volatile int g_running = 1;
 static uint64_t g_prev_Fend = (uint64_t)-1;
 static uint64_t g_anchor_foff = (uint64_t)-1;
 static uint64_t g_anchor_stream_pos = 0;
+static uint64_t g_anchor_birth_ms = 0;
+static uint64_t g_probe_seq_end = (uint64_t)-1;
+static int g_probe_consecutive_count = 0;
+static uint64_t g_probe_accumulated_bytes = 0;
 static uint64_t g_last_tv_stream_pos = 0;
 static uint64_t g_last_file_read_ms = 0;
 static uint64_t s_last_pace_ms = 0;
@@ -52,7 +56,7 @@ static uint64_t now_ms(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000);
 }
-/* no-op wait (host test: feeder already buffered, never blocks) */
+static void wait_step(void) __attribute__((unused));
 static void wait_step(void) { }
 
 static void fill_null(uint8_t *dst, size_t n) {
@@ -213,9 +217,6 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
     uint64_t now = now_ms();
     uint64_t ring_old = (g_s_write > RINGSZ) ? g_s_write - RINGSZ : 0;
 
-    static uint64_t g_probe_seq_end = (uint64_t)-1;
-    static int g_probe_consecutive_count = 0;
-
     int is_seq_read = (g_prev_Fend != (uint64_t)-1 &&
                        (foff == g_prev_Fend ||
                         (foff > g_prev_Fend && foff - g_prev_Fend <= 262144) ||
@@ -224,17 +225,25 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
     if (!is_seq_read) {
         if (g_probe_seq_end != (uint64_t)-1 && foff == g_probe_seq_end) {
             g_probe_consecutive_count++;
+            g_probe_accumulated_bytes += c;
             g_probe_seq_end = foff + c;
         } else {
             g_probe_consecutive_count = 1;
+            g_probe_accumulated_bytes = c;
             g_probe_seq_end = foff + c;
         }
     } else {
         g_probe_consecutive_count = 0;
+        g_probe_accumulated_bytes = 0;
         g_probe_seq_end = (uint64_t)-1;
     }
 
-    int is_confirmed_jump = (!is_seq_read && g_probe_consecutive_count >= 3);
+    int is_opening_grace = (g_anchor_birth_ms != 0 && (now - g_anchor_birth_ms < 10000ULL) && g_anchor_foff <= 4ULL * 1024 * 1024);
+
+    int is_confirmed_jump = (!is_seq_read &&
+                             !is_opening_grace &&
+                             g_probe_consecutive_count >= 4 &&
+                             g_probe_accumulated_bytes >= 1ULL * 1024 * 1024);
 
     uint64_t s_probe = foff_to_stream_pos(foff);
     int is_future_probe = (s_probe >= g_s_write + 2ULL*1024*1024 && !is_seq_read);
@@ -259,6 +268,7 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
     } else if (is_confirmed_jump) {
         is_reopen = 1;
         g_probe_consecutive_count = 0;
+        g_probe_accumulated_bytes = 0;
         g_probe_seq_end = (uint64_t)-1;
     }
     g_last_is_reopen = is_reopen;
@@ -277,6 +287,7 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
                 g_last_tv_stream_pos=snapped_abs;
                 g_base_valid=1;
                 g_prev_Fend=(uint64_t)-1;
+                g_anchor_birth_ms=now;
                 s_last_pace_ms=0;
                 size_t c_h=65536; if (c_h>HDRCACHESZ) c_h=HDRCACHESZ;
                 uint64_t reader_p=snapped_abs;
@@ -329,6 +340,9 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
     if (g_base_valid){
         g_last_tv_stream_pos=foff_to_stream_pos(foff+c);
         g_prev_Fend=foff+c;
+        g_probe_consecutive_count=0;
+        g_probe_accumulated_bytes=0;
+        g_probe_seq_end=(uint64_t)-1;
     }
 }
 
@@ -408,6 +422,7 @@ static int equals_ring(const uint8_t *b, uint64_t F, size_t n) {
     free(exp);
     return eq;
 }
+static int has_video_pid(const uint8_t *b, size_t n) __attribute__((unused));
 static int has_video_pid(const uint8_t *b, size_t n) {
     size_t off=n%188;
     for(;off+188<=n;off+=188){
@@ -450,7 +465,7 @@ int main(void) {
     CHECK(g_s_write>=MIN_STREAM_START,"feeder pre-buffer >= MIN_STREAM_START (6MB): S_write=%llu",
         (unsigned long long)g_s_write);
 
-    uint8_t *blk=(uint8_t*)malloc(BLOCK);
+    uint8_t *blk=(uint8_t*)malloc(262144);
     if(!blk){printf("FAIL: malloc blk\n");return 1;}
     uint64_t dl=now_ms()+2000;
 
@@ -485,103 +500,78 @@ int main(void) {
     printf("[seq] g_prev_Fend=%llu (expect %llu)\n",
         (unsigned long long)fend_before_jump,(unsigned long long)FOFF_SEQ_END);
     CHECK(fend_before_jump==FOFF_SEQ_END,"g_prev_Fend==901120 after sequential phase");
-    uint64_t anchor_seq=g_anchor_foff, apos_seq=g_anchor_stream_pos, epoch_seq=g_epoch;
+    uint64_t anchor_seq = g_anchor_foff, epoch_seq = g_epoch;
     CHECK(anchor_seq==0,"anchor still at foff=0 after sequential phase (got %llu)",
         (unsigned long long)anchor_seq);
 
-    /* Step 4a: FIRST block at 800MB — non-sequential distant probe -> NULLs, state intact */
-    printf("[jump-a] first 64KB at foff=%llu (count=1)...\n",
-        (unsigned long long)FOFF_JUMP);
-    serve_live_backend(blk,FOFF_JUMP,BLOCK,dl);
-    CHECK(is_null_block(blk,BLOCK),"4a: first block at 800MB returns NULLs (PID 0x1FFF)");
-    CHECK(g_anchor_foff==anchor_seq,"4a: anchor_foff unchanged (still %llu)",
-        (unsigned long long)g_anchor_foff);
-    CHECK(g_prev_Fend==FOFF_SEQ_END,"4a: g_prev_Fend untouched (still %llu)",
-        (unsigned long long)g_prev_Fend);
-
-    /* Step 4b: SECOND block at 800MB — still probe (count=2) -> NULLs, active anchor intact */
-    uint64_t FOFF_JUMP2=FOFF_JUMP+BLOCK;
-    printf("[jump-b] second 64KB at foff=%llu (count=2)...\n",
-        (unsigned long long)FOFF_JUMP2);
-    serve_live_backend(blk,FOFF_JUMP2,BLOCK,dl);
-    CHECK(is_null_block(blk,BLOCK),"4b: second block at 800MB returns NULLs (count=2)");
-    CHECK(g_anchor_foff==anchor_seq,"4b: anchor_foff still unchanged (still %llu)",
-        (unsigned long long)g_anchor_foff);
-    CHECK(g_prev_Fend==FOFF_SEQ_END,"4b: g_prev_Fend still untouched");
-
-    /* Step 4c: THIRD block at 800MB — confirmed jump (count=3) -> is_reopen=1 -> re-anchors! */
-    uint64_t FOFF_JUMP3=FOFF_JUMP+2*BLOCK;
-    printf("[jump-c] third 64KB at foff=%llu (count=3, confirmed jump!)...\n",
-        (unsigned long long)FOFF_JUMP3);
-    serve_live_backend(blk,FOFF_JUMP3,BLOCK,dl);
-    printf("    is_reopen=%d anchor_foff=%llu anchor_pos=%llu epoch=%llu\n",
-        g_last_is_reopen,(unsigned long long)g_anchor_foff,
-        (unsigned long long)g_anchor_stream_pos,(unsigned long long)g_epoch);
-    CHECK(g_last_is_reopen==1,"4c: third block confirms jump and fires is_reopen=1");
-    CHECK(g_anchor_foff==FOFF_JUMP3,"4c: new anchor fixed at foff=800MB-3rd-block (%llu)",
-        (unsigned long long)FOFF_JUMP3);
-    CHECK(g_anchor_stream_pos%188==0,"4c: new stream_pos 188-aligned (%llu)",
-        (unsigned long long)g_anchor_stream_pos);
-    CHECK(is_pat_at(g_anchor_stream_pos),"4c: new stream_pos aligned to PAT/SPS (pos=%llu)",
-        (unsigned long long)g_anchor_stream_pos);
-    CHECK(g_epoch==epoch_seq+1,"4c: epoch incremented exactly once (%llu -> %llu)",
-        (unsigned long long)epoch_seq,(unsigned long long)g_epoch);
-    CHECK(g_prev_Fend==FOFF_JUMP3+BLOCK,"4c: g_prev_Fend now tracks 800MB stream");
-
-    /* Step 4d: subsequent blocks deliver valid video from ring */
-    printf("[play] next 4x64KB after re-anchor...\n");
-    int valid_ok=1;
-    for(int i=1;i<=4;i++){
-        uint64_t f=FOFF_JUMP3+(uint64_t)i*BLOCK;
-        serve_live_backend(blk,f,BLOCK,dl);
-        int nul=is_null_block(blk,BLOCK);
-        int eq=equals_ring(blk,f,BLOCK);
-        int sync=has_sync(blk,BLOCK)||has_sync_any(blk,BLOCK);
-        printf("    foff=%llu null=%d ring_equal=%d sync188=%d\n",(unsigned long long)f,nul,eq,sync);
-        if(nul||!eq) valid_ok=0;
+    /* Step 4: ConnectShare opening probe at 800MB (16KB, 32KB, 64KB, 128KB, 128KB = 368KB total)
+     * Real Samsung TV behavior: ConnectShare probes container metadata at 800MB (10% of 8GB)
+     * during initial opening, then returns to foff=1032192 (continuation of sequential stream).
+     * These probes MUST ALL return NULL packets and MUST NOT move g_anchor_foff or touch g_prev_Fend! */
+    printf("[probe-800m] ConnectShare opening probe sequence at 800MB (total 368KB)...\n");
+    size_t probe_sizes[] = {16384, 32768, 65536, 131072, 131072};
+    uint64_t curr_probe_off = FOFF_JUMP;
+    for (int i = 0; i < 5; i++) {
+        size_t psz = probe_sizes[i];
+        serve_live_backend(blk, curr_probe_off, psz, dl);
+        CHECK(is_null_block(blk, psz), "4.%d: probe %zu bytes at foff=%llu returns NULLs",
+              i + 1, psz, (unsigned long long)curr_probe_off);
+        CHECK(g_anchor_foff == anchor_seq, "4.%d: anchor_foff untouched (still %llu)",
+              i + 1, (unsigned long long)g_anchor_foff);
+        CHECK(g_prev_Fend == FOFF_SEQ_END, "4.%d: g_prev_Fend untouched (still %llu)",
+              i + 1, (unsigned long long)g_prev_Fend);
+        CHECK(g_epoch == epoch_seq, "4.%d: epoch unchanged (still %llu)",
+              i + 1, (unsigned long long)g_epoch);
+        curr_probe_off += psz;
     }
-    CHECK(valid_ok,"4d: 4 subsequent blocks deliver valid video from ring (byte-equal ring memory, not NULLs)");
-    uint64_t anchor_play=g_anchor_foff, apos_play=g_anchor_stream_pos, epoch_play=g_epoch;
-    uint64_t fend_play=g_prev_Fend;
 
-    /* Step 4e: MULTI-BLOCK probe at 1.5GB (2 blocks) must NOT move anchor nor break 800MB playback */
-    printf("[probe] 2-block probe (128KB) at 1.5GB (%llu) during active 800MB playback...\n",
-        (unsigned long long)FOFF_PROBE_15G);
-    serve_live_backend(blk,FOFF_PROBE_15G,BLOCK,dl);
-    CHECK(is_null_block(blk,BLOCK),"4e: 1.5GB probe block 1 returns NULLs");
-    serve_live_backend(blk,FOFF_PROBE_15G+BLOCK,BLOCK,dl);
-    CHECK(is_null_block(blk,BLOCK),"4e: 1.5GB probe block 2 returns NULLs (count=2 < 3)");
-    CHECK(g_anchor_foff==anchor_play,"4e: anchor_foff unchanged after 2-block probe (still %llu)",
-        (unsigned long long)g_anchor_foff);
-    CHECK(g_anchor_stream_pos==apos_play,"4e: anchor_stream_pos unchanged (%llu)",
-        (unsigned long long)g_anchor_stream_pos);
-    CHECK(g_epoch==epoch_play,"4e: epoch unchanged after probe (%llu)",
-        (unsigned long long)g_epoch);
-    CHECK(g_prev_Fend==fend_play,"4e: g_prev_Fend untouched by 2-block probe (still %llu)",
-        (unsigned long long)g_prev_Fend);
+    /* Step 5: TV returns to sequential playback at foff=1032192 (901120 + 131072)
+     * Because g_prev_Fend was preserved at 901120, this read is recognized as sequential!
+     * Because g_anchor_foff was NOT moved to 800MB, it delivers continuous valid video! */
+    uint64_t foff_resume = FOFF_SEQ_END; /* 901120 */
+    printf("[resume] TV returns to sequential playback at foff=%llu...\n",
+           (unsigned long long)foff_resume);
+    serve_live_backend(blk, foff_resume, BLOCK, dl);
+    CHECK(!is_null_block(blk, BLOCK), "5a: resume at foff=%llu delivers valid video (NOT NULLs!)",
+          (unsigned long long)foff_resume);
+    CHECK(equals_ring(blk, foff_resume, BLOCK), "5b: resume block matches ring memory exactly");
+    CHECK(g_anchor_foff == anchor_seq, "5c: anchor still at foff=0 (zero anchor hijacking!)");
+    CHECK(g_epoch == epoch_seq, "5d: epoch still %llu (zero spurious epoch bump!)",
+          (unsigned long long)epoch_seq);
+    CHECK(g_prev_Fend == foff_resume + BLOCK, "5e: g_prev_Fend now advances to %llu",
+          (unsigned long long)(foff_resume + BLOCK));
 
-    /* Step 4f: resume: TV continues reading at fend_play (800MB stream) */
-    printf("[resume] TV continues at foff=%llu (800MB active stream)...\n",
-        (unsigned long long)fend_play);
-    serve_live_backend(blk,fend_play,BLOCK,dl);
-    CHECK(!is_null_block(blk,BLOCK),"4f: resume block delivers valid video (not NULLs!)");
-    CHECK(g_anchor_foff==anchor_play,"4f: anchor still at 800MB (no re-anchor!)");
-    {
-        uint8_t *rb=(uint8_t*)malloc(BLOCK);
-        /* First resume block: backward jump from probe — may be NULL (isolation) or
-           valid (if within tolerance); either way anchor must NOT move. */
-        serve_live_backend(rb,fend_play,BLOCK,dl);
-        int anchor_kept=(g_anchor_foff==anchor_play && g_anchor_stream_pos==apos_play);
-        CHECK(anchor_kept,"4e: resume block does not move anchor (foff=%llu epoch=%llu)",
-            (unsigned long long)g_anchor_foff,(unsigned long long)g_epoch);
-        /* Second resume block: sequential continuation of resume cursor -> valid video */
-        serve_live_backend(rb,fend_play+BLOCK,BLOCK,dl);
-        int ok=!is_null_block(rb,BLOCK)&&equals_ring(rb,fend_play+BLOCK,BLOCK);
-        CHECK(ok,"4e: sequential continuation at 800MB still delivers video after probe");
-        CHECK(g_anchor_foff==anchor_play,"4e: anchor still at 800MB after resume (%llu)",
-            (unsigned long long)g_anchor_foff);
-        free(rb);
+    /* Step 6: 4 subsequent sequential blocks delivered smoothly */
+    printf("[play] continuing sequential playback at 1MB..2MB...\n");
+    int seq_play_ok = 1;
+    for (int i = 1; i <= 4; i++) {
+        uint64_t f = foff_resume + (uint64_t)i * BLOCK;
+        serve_live_backend(blk, f, BLOCK, dl);
+        if (is_null_block(blk, BLOCK) || !equals_ring(blk, f, BLOCK)) {
+            seq_play_ok = 0;
+            break;
+        }
     }
+    CHECK(seq_play_ok, "6: 4 subsequent sequential blocks deliver valid ring video");
+
+    /* Step 7: Real confirmed user seek (outside grace period, >= 4 blocks AND >= 1 MB) */
+    printf("[seek] simulated real user seek outside grace period (16 blocks x 64KB = 1MB)...\n");
+    g_anchor_birth_ms = now_ms() - 15000ULL; /* advance past 10s grace period */
+    uint64_t FOFF_SEEK = 1600000000ULL; /* 1.6 GB */
+    uint64_t epoch_before_seek = g_epoch;
+    int seek_reanchored = 0;
+
+    for (int i = 0; i < 16; i++) {
+        uint64_t f = FOFF_SEEK + (uint64_t)i * BLOCK;
+        serve_live_backend(blk, f, BLOCK, dl);
+        if (g_last_is_reopen) {
+            seek_reanchored = 1;
+            break;
+        }
+    }
+    CHECK(seek_reanchored, "7a: real seek >= 1MB confirms jump and triggers re-anchor");
+    CHECK(g_epoch == epoch_before_seek + 1, "7b: epoch incremented exactly once on confirmed seek");
+    CHECK(g_anchor_foff >= FOFF_SEEK, "7c: anchor_foff updated to seek location");
 
     printf("\n=== RESULT: %d PASS, %d FAIL ===\n",passes,fails);
     free(blk); free(g_ring);

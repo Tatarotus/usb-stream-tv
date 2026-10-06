@@ -83,12 +83,14 @@ def _load_env_file(env_file):
                         continue
                     k, v = line.split("=", 1)
                     k, v = k.strip(), v.strip().strip("'\"")
-                    if k and k not in os.environ:
-                        os.environ[k] = v
+                    if k:
+                        if k not in os.environ or not os.environ[k]:
+                            os.environ[k] = v
         except Exception:
             pass
 
 _load_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+XTREAM_UPSTREAM = os.environ.get("XTREAM_UPSTREAM", "")
 
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 CHANNELS_FILE = os.environ.get("CHANNELS_FILE", os.path.join(CONFIG_DIR, "channels.json"))
@@ -105,14 +107,14 @@ XTREAM_PASS = os.environ.get("XTREAM_PASS", "")
 
 def _discover_xtream_credentials():
     global XTREAM_USER, XTREAM_PASS, XTREAM_UPSTREAM
-    if XTREAM_USER and XTREAM_PASS:
+    if XTREAM_USER and XTREAM_PASS and XTREAM_UPSTREAM:
         return
     candidates = [
+        os.path.join(CONFIG_DIR, ".env"),
+        os.path.join(os.path.dirname(CONFIG_DIR), ".env"),
         CHANNELS_FILE,
         os.path.join(CONFIG_DIR, "channels_deploy.json"),
         os.path.join(CONFIG_DIR, "channels.json"),
-        os.path.join(CONFIG_DIR, ".env"),
-        os.path.join(os.path.dirname(CONFIG_DIR), ".env")
     ]
     for p in candidates:
         if p and os.path.exists(p):
@@ -121,8 +123,8 @@ def _discover_xtream_credentials():
                     _load_env_file(p)
                     XTREAM_USER = XTREAM_USER or os.environ.get("XTREAM_USER", "")
                     XTREAM_PASS = XTREAM_PASS or os.environ.get("XTREAM_PASS", "")
-                    if not os.environ.get("XTREAM_UPSTREAM") and os.environ.get("XTREAM_UPSTREAM"):
-                        XTREAM_UPSTREAM = os.environ.get("XTREAM_UPSTREAM")
+                    if not XTREAM_UPSTREAM:
+                        XTREAM_UPSTREAM = os.environ.get("XTREAM_UPSTREAM", "")
                 elif p.endswith(".json"):
                     with open(p, "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -130,8 +132,8 @@ def _discover_xtream_credentials():
                     if srv.get("usuario") and srv.get("senha"):
                         XTREAM_USER = XTREAM_USER or srv.get("usuario")
                         XTREAM_PASS = XTREAM_PASS or srv.get("senha")
-                        if not os.environ.get("XTREAM_UPSTREAM") and srv.get("url_base"):
-                            XTREAM_UPSTREAM = srv.get("url_base")
+                    if not XTREAM_UPSTREAM and srv.get("url_base"):
+                        XTREAM_UPSTREAM = srv.get("url_base")
                     for c in data.get("canais", []):
                         u = c.get("url", "")
                         m = re.search(r'/(?:live|movie|series)/([^/]+)/([^/]+)/\d+', u)
@@ -141,10 +143,15 @@ def _discover_xtream_credentials():
                             break
             except Exception:
                 pass
-        if XTREAM_USER and XTREAM_PASS:
+        if XTREAM_USER and XTREAM_PASS and XTREAM_UPSTREAM:
             break
 
+    if not XTREAM_UPSTREAM:
+        XTREAM_UPSTREAM = os.environ.get("XTREAM_UPSTREAM", "") or "http://studut.shop:80"
+
 _discover_xtream_credentials()
+if not XTREAM_UPSTREAM:
+    XTREAM_UPSTREAM = "http://studut.shop:80"
 VOD_TASKS = {}
 VOD_TASKS_LOCK = threading.Lock()
 ACTIVE_VOD_TASK = None
@@ -661,10 +668,17 @@ def is_channel_eco(name, url=""):
 def resolve_channel_url(url):
     if not url:
         return ""
-    upstream = XTREAM_UPSTREAM.rstrip("/")
-    return (url.replace("{XTREAM_UPSTREAM}", upstream)
-               .replace("{XTREAM_USER}", XTREAM_USER)
-               .replace("{XTREAM_PASS}", XTREAM_PASS))
+    upstream = (XTREAM_UPSTREAM or os.environ.get("XTREAM_UPSTREAM", "") or "http://studut.shop:80").rstrip("/")
+    user = XTREAM_USER or os.environ.get("XTREAM_USER", "")
+    pwd = XTREAM_PASS or os.environ.get("XTREAM_PASS", "")
+    resolved = (str(url).replace("{XTREAM_UPSTREAM}", upstream)
+                        .replace("{XTREAM_USER}", user)
+                        .replace("{XTREAM_PASS}", pwd))
+    if resolved.startswith(("/live/", "/movie/", "/series/")):
+        resolved = f"{upstream}{resolved}"
+    elif resolved.startswith(("live/", "movie/", "series/")):
+        resolved = f"{upstream}/{resolved}"
+    return resolved
 
 class ChannelManager:
     """Gerencia o carregamento dinâmico de canais e cache com base no mtime."""
@@ -863,7 +877,8 @@ class CatalogManager:
             ]
             for ctype, action, fname, is_cat in actions:
                 try:
-                    url = f"{XTREAM_UPSTREAM}/player_api.php?username={XTREAM_USER}&password={XTREAM_PASS}&action={action}"
+                    upstream = (XTREAM_UPSTREAM or os.environ.get("XTREAM_UPSTREAM", "") or "http://studut.shop:80").rstrip("/")
+                    url = f"{upstream}/player_api.php?username={XTREAM_USER}&password={XTREAM_PASS}&action={action}"
                     headers = {"User-Agent": "IPTVSmarters/3.1.1", "Accept": "*/*"}
                     req = urllib.request.Request(url, headers=headers)
                     with urllib.request.urlopen(req, timeout=45) as resp:
@@ -927,7 +942,7 @@ class CatalogManager:
                     if not (mgr.is_fav(s_id_str) or (target_id and mgr.is_fav(str(target_id)))):
                         continue
                 elif cat_str == "eco":
-                    ch_url = f"{XTREAM_UPSTREAM}/live/{XTREAM_USER}/{XTREAM_PASS}/{stream_id}.ts"
+                    ch_url = resolve_channel_url(f"/live/{XTREAM_USER}/{XTREAM_PASS}/{stream_id}.ts")
                     if not is_channel_eco(name, ch_url):
                         continue
                 else:
@@ -940,7 +955,7 @@ class CatalogManager:
                 continue
 
             if ctype == "live":
-                live_url = f"{XTREAM_UPSTREAM}/live/{XTREAM_USER}/{XTREAM_PASS}/{stream_id}.ts"
+                live_url = resolve_channel_url(f"/live/{XTREAM_USER}/{XTREAM_PASS}/{stream_id}.ts")
                 logo = (it.get("stream_icon") or "").strip()
                 if logo and logo.startswith("http://"):
                     logo = f"/api/logo?url={urllib.parse.quote(logo, safe='')}"
@@ -971,7 +986,7 @@ class CatalogManager:
                     "year": str(it.get("year") or ""),
                     "cat_id": it.get("category_id"),
                     "ext": ext,
-                    "url": f"{XTREAM_UPSTREAM}/movie/{XTREAM_USER}/{XTREAM_PASS}/{stream_id}.{ext}"
+                    "url": resolve_channel_url(f"/movie/{XTREAM_USER}/{XTREAM_PASS}/{stream_id}.{ext}")
                 })
             elif ctype == "series":
                 series_id = it.get("series_id") or it.get("id")
@@ -1021,7 +1036,8 @@ class CatalogManager:
             print(f"[!] Erro ao buscar série {series_id}: credenciais XTREAM_USER/XTREAM_PASS não configuradas")
             return {"error": "Credenciais IPTV não configuradas no servidor.", "seasons": []}
 
-        url = f"{XTREAM_UPSTREAM}/player_api.php?username={XTREAM_USER}&password={XTREAM_PASS}&action=get_series_info&series_id={series_id}"
+        upstream = (XTREAM_UPSTREAM or os.environ.get("XTREAM_UPSTREAM", "") or "http://studut.shop:80").rstrip("/")
+        url = f"{upstream}/player_api.php?username={XTREAM_USER}&password={XTREAM_PASS}&action=get_series_info&series_id={series_id}"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "IPTVSmarters/3.1.1"})
             with urllib.request.urlopen(req, timeout=15) as resp:
@@ -1044,7 +1060,7 @@ class CatalogManager:
                         "title": ep.get("title") or f"Episódio {ep.get('episode_num')}",
                         "duration": ep_info.get("duration", ""),
                         "plot": ep_info.get("plot", ""),
-                        "url": f"{XTREAM_UPSTREAM}/series/{XTREAM_USER}/{XTREAM_PASS}/{ep_id}.{ext}"
+                        "url": resolve_channel_url(f"/series/{XTREAM_USER}/{XTREAM_PASS}/{ep_id}.{ext}")
                     })
                 seasons_formatted.append({
                     "season_number": s_num,
@@ -2118,7 +2134,7 @@ class StreamHub:
                 if custom_url:
                     target_id = f"custom_{custom_url}"
                     target_name = custom_name or (ch["name"] if ch else "Canal Personalizado")
-                    target_url = custom_url
+                    target_url = resolve_channel_url(custom_url)
                     self.last_live_channel = target_id
                 elif channel_id:
                     if not ch:
@@ -2126,10 +2142,12 @@ class StreamHub:
                         return
                     target_id = ch["id"]
                     target_name = ch["name"]
-                    target_url = ch["url"]
+                    target_url = resolve_channel_url(ch["url"])
                     self.last_live_channel = target_id
                 else:
                     return
+
+                target_url = resolve_channel_url(target_url)
 
                 if not force and target_id == self.current_channel_id:
                     print(f"[~] Já sintonizado em: {target_name}")
@@ -4042,7 +4060,8 @@ self.addEventListener('message', (event) => {
                         self.wfile.write(c_data)
                         return
 
-        upstream_url = f"{XTREAM_UPSTREAM}{parsed.path}"
+        upstream = (XTREAM_UPSTREAM or os.environ.get("XTREAM_UPSTREAM", "") or "http://studut.shop:80").rstrip("/")
+        upstream_url = f"{upstream}{parsed.path}"
         if query_str:
             upstream_url += f"?{query_str}"
 
@@ -4108,14 +4127,14 @@ self.addEventListener('message', (event) => {
 
     def handle_xtream_stream(self, kind, user, pwd, stream_id, ext):
         if kind == "movie":
-            target_url = f"{XTREAM_UPSTREAM}/movie/{user}/{pwd}/{stream_id}.{ext or 'mp4'}"
+            target_url = resolve_channel_url(f"/movie/{user}/{pwd}/{stream_id}.{ext or 'mp4'}")
             cname = f"Filme {stream_id}"
         elif kind == "series":
-            target_url = f"{XTREAM_UPSTREAM}/series/{user}/{pwd}/{stream_id}.{ext or 'mp4'}"
+            target_url = resolve_channel_url(f"/series/{user}/{pwd}/{stream_id}.{ext or 'mp4'}")
             cname = f"Série {stream_id}"
         else:
             # Padrão: canal ao vivo
-            target_url = f"{XTREAM_UPSTREAM}/live/{user}/{pwd}/{stream_id}.ts"
+            target_url = resolve_channel_url(f"/live/{user}/{pwd}/{stream_id}.ts")
             cname = f"Canal {stream_id}"
 
         target_url = self.resolve_stream_url(target_url)
@@ -4182,6 +4201,7 @@ self.addEventListener('message', (event) => {
                 return
 
         if custom_url and not any(x in custom_url.lower() for x in ["youtube.com", "youtu.be"]):
+            custom_url = resolve_channel_url(custom_url)
             if any(x in custom_url.lower() for x in ["/movie/", "/series/"]):
                 custom_url = self.resolve_stream_url(custom_url)
 
@@ -4203,10 +4223,17 @@ self.addEventListener('message', (event) => {
             return
 
         ch_id = query.get("id", [""])[0] or query.get("channel_id", [""])[0]
+        custom_url = query.get("url", [""])[0]
+        custom_name = query.get("name", [""])[0]
         no_reconnect_val = query.get("no_reconnect", ["0"])[0] or query.get("no_usb_reconnect", ["0"])[0]
         no_reconnect = no_reconnect_val in ["1", "true", "True", "yes"]
 
-        ok = HUB.switch_channel(channel_id=ch_id, no_reconnect=no_reconnect)
+        if custom_url:
+            custom_url = resolve_channel_url(custom_url)
+            if any(x in custom_url.lower() for x in ["/movie/", "/series/"]):
+                custom_url = self.resolve_stream_url(custom_url)
+
+        ok = HUB.switch_channel(channel_id=ch_id, custom_url=custom_url or None, custom_name=custom_name or None, no_reconnect=no_reconnect)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")

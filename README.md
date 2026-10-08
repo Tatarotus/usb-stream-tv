@@ -28,7 +28,7 @@ O sistema transforma um dispositivo Android antigo com suporte a OTG/USB Gadget 
 
 ## ✨ Recursos Principais
 
-- **Emulação USB Mass Storage Inteligente**: Apresenta à TV uma partição NTFS válida de 8.0 GiB contendo o arquivo de transmissão ao vivo (`TV AO VIVO.trp` ou `TV AO VIVO 2.tp`).
+- **Emulação USB Mass Storage Inteligente**: Apresenta à TV uma partição NTFS válida de 128 GiB thin-provisioned (ocupando apenas ~69 MB reais no filesystem ext4 do Android) contendo o arquivo de transmissão ao vivo (`TV AO VIVO.trp` ou `TV AO VIVO 2.tp`).
 - **Mapeamento Circular em RAM com FUSE**: Ring buffer de 128 MiB em RAM que mapeia offsets infinitos de reprodução para a janela ao vivo atual, mantendo um colchão de segurança de 20–25 segundos.
 - **Anti-Cache de Hardware Automatizado**:
   - Alternância de nomes no sistema de arquivos NTFS MFT (`TV AO VIVO.trp` ↔ `TV AO VIVO 2.tp`).
@@ -44,10 +44,15 @@ O sistema transforma um dispositivo Android antigo com suporte a OTG/USB Gadget 
 - **Arquitetura VOD V2 com Dual-Cache & Prefetch Assíncrono**:
   - **FUSE Head Pinning Cache (8 MB)**: Fixação em RAM dos primeiros 8 MB para resposta imediata (0 ms) de cabeçalhos e átomos MP4 (`moov`/`ftyp`), eliminando latência em seeks para a posição zero.
   - **Dedicated Media Sliding Cache (16 MB)**: Double buffering com thread assíncrona de prefetch em blocos de 4 MB e conexões TCP persistentes com `TCP_NODELAY`, prevenindo travamentos e *buffer underruns*.
-  - **Deploy & Rollback Atômico a Quente**: Scripts com controle de concorrência por lock directory atômico e validação estrita de integridade ELF.
+  - **Fail-Safe & Watchdog Resiliente**: Transição atômica de modos com `fail_rollback()` para impedir gadget órfão em `enable=0`, timeouts de teardown calibrados para SCSI e watchdog com isolamento de workers.
+- **Ingestão Ultraleve com Resiliência de Rede**:
+  - Parser HTTP bulk de 4 KB eliminando milhares de transições user-kernel.
+  - Timeouts de rede e socket clampados a 2.5s / 3.0s (estritamente abaixo do deadline de 3.5s do MStar).
+  - Resolução DNS com cache e fallback estático.
+  - Compactação de buffer MPEG-TS com preservação de alinhamento de 188 bytes para prevenção de descontinuidade de PCR/PTS.
 - **Modos de Operação**:
   - **TV Ao Vivo (Live)**: Transmissão linear contínua.
-  - **Cinema (VOD)**: Catálogo sob demanda integrado a YouTube / filmes MP4 locais.
+  - **Cinema (VOD)**: Catálogo sob demanda integrado a torrents e filmes MP4 locais.
   - **Multi-Canais / Favoritos**: Exposição de diretório virtual com múltiplos canais.
 
 ---
@@ -64,43 +69,57 @@ usb-stream-tv-prod/
 ├── compose.yaml            # Configuração de implantação Docker Compose
 ├── channels.json           # Grade unificada e higienizada de canais (sem senhas)
 ├── generate_slate.sh       # Gerador das telas de standby/slate offline
+├── gen_template.py         # Gerador de templates sintéticos VOD
 ├── dashboard.html          # Controle remoto Web & PWA
 ├── manifest.json           # Manifesto PWA
 ├── sw.js                   # Service Worker PWA
 ├── app-icon-512.png        # Ícone do PWA
 ├── app-icon.png            # Ícone do PWA
+├── torrent_downloader.py   # Gerenciador de downloads torrent/magnet e pós-processamento
 ├── src/
 │   ├── ntfs/               # Motor do driver FUSE NTFS
 │   │   ├── fuse_ntfs.c     # Implementação em C do FUSE NTFS
 │   │   ├── fuse_ntfs.h     # Definições de geometria e estruturas NTFS
+│   │   ├── catalog_hierarchy.h # Definições de diretórios virtuais de canais
+│   │   ├── catalog_favorites.h # Mapeamento de favoritos
 │   │   └── fuse_ntfs_arm32 # Binário estático compilado para ARM32
 │   ├── client/             # Ingestão de rede ultraleve e VOD Direct
 │   │   ├── fuse_direct_v2.c # Motor FUSE VOD v2 com Head Pinning Cache de 8MB e prefetch
-│   │   ├── stream_fetcher.c # Ingestor TCP socket sem overhead de libc
+│   │   ├── fuse_direct_arm32 # Binário estático ARM32 para VOD v2
+│   │   ├── stream_fetcher.c # Ingestor TCP socket bulk de alta velocidade
 │   │   └── stream_fetcher_arm32 # Binário estático para ARM32
-│   └── tools/              # Utilitários de patch de disco
+│   └── tools/              # Utilitários de sistema de arquivos e MFT
 │       ├── patch_trp.c     # Patcher de MFT Inode 27 para alternar arquivos
-│       └── patch_trp_arm32 # Binário estático ARM32
-├── scripts/                # Scripts de controle e upgrade no tablet
-│   ├── apply_vod_v2.sh     # Hot-upgrade atômico para VOD v2 com validação ELF
-│   ├── rollback_vod.sh     # Reversão determinística de 1 comando para VOD
-│   ├── deploy_tablet.sh    # Deploy automático via ADB
-│   ├── switch_tv_mode.sh   # Alternador de modos (Live, Cinema, Favoritos)
+│       ├── patch_trp_arm32 # Binário estático ARM32
+│       ├── sparse_unpack.c # Descompactador de imagens esparsas thin-provisioned
+│       └── sparse_unpack_arm32 # Binário estático ARM32
+├── scripts/                # Scripts de controle e automação no tablet
+│   ├── deploy_tablet.sh    # Deploy automático e atômico via ADB
+│   ├── install-recovery-2.sh # Instalação de persistência no boot do tablet
+│   ├── pack_sparse_template.py # Utilitário para empacotar templates ext4 esparsos
+│   ├── switch_tv_mode.sh   # Alternador de modos com fail-safe rollback (Live/Cinema)
 │   ├── switch_live.sh      # Atalho para retorno ao Live
 │   ├── switch_vod.sh       # Alternador para Modo Cinema
 │   ├── reconnect_usb.sh    # Soft-reset do barramento USB
 │   ├── sync_youtube_cookies.sh # Sincronização de cookies YouTube do navegador
-│   └── tv_watchdog.sh      # Daemon de monitoramento, wakelock e CPU governor
-├── tests/                  # Bateria de testes de validação
-│   ├── test_vod_lock_and_elf.sh # Validação unitária de exclusão mútua e integridade ELF
-│   └── test_probe_sar.py   # Testes unitários do probe de aspect ratio / SAR anamórfico
+│   └── tv_watchdog.sh      # Daemon de monitoramento, wakelock e recuperação
+├── tests/                  # Bateria de testes de validação unitária e stress
+│   ├── test_fat32_integrity.py # Validação de integridade do template e geometria FAT32
+│   ├── test_ntfs_extents_128g.c # Verificação de extents e runlists no NTFS de 128G
+│   ├── test_probe_sar.py   # Testes do probe de aspect ratio / SAR anamórfico
+│   ├── test_seek_reanchor.c # Simulação de ConnectShare probe isolation e re-ancoragem
+│   ├── test_server_control_plane.py # Validação do CommandBus e despacho de comandos
+│   ├── test_torrent_vod.py # Testes do pipeline VOD torrent
+│   ├── test_torrent_vod_stress.py # Testes de estresse e resiliência de downloads VOD
+│   └── test_vod_lock_and_elf.sh # Validação unitária de exclusão mútua e integridade ELF
 ├── templates/
-│   └── ntfs_template.tar.gz # Template esparso do sistema de arquivos NTFS (8.5 GB)
-└── docs/                   # Documentação detalhada
+│   └── ntfs_template.sparse.gz # Template esparso thin-provisioned de 128 GiB (~193 KB)
+└── docs/                   # Documentação técnica detalhada
     ├── ARCHITECTURE.md     # Arquitetura do driver FUSE e pipeline
     ├── VOD_ARCHITECTURE.md # Pipeline de engenharia VOD Cinema V2 e prefetch
     ├── DEPLOYMENT_GUIDE.md # Guia passo a passo de instalação
     ├── HARDWARE_SPECS.md   # Especificações do decodificador Samsung MStar 2013
+    ├── LIVE_EDGE_LOCK_AND_PROBE_ISOLATION.md # Teoria e testes de probe isolation
     └── TROUBLESHOOTING.md  # Diagnóstico e solução de problemas
 ```
 
@@ -134,8 +153,8 @@ Com o tablet conectado ao computador via ADB:
 ```
 
 O script cuidará de:
-1. Enviar o template NTFS e descompactar em `/data/local/tmp/ntfs_lab/`.
-2. Instalar os binários ARM32 estáticos em `/system/xbin/`.
+1. Enviar o template NTFS esparso de 128 GiB (`ntfs_template.sparse.gz`) e descompactar via `sparse_unpack_arm32` em `/data/local/tmp/ntfs_lab/ntfs_template.bin`.
+2. Instalar os binários ARM32 estáticos (`fuse_ntfs`, `fuse_direct_arm32`, `stream_fetcher`, `patch_trp`) em `/system/xbin/`.
 3. Configurar scripts de inicialização, wakelocks e governador de CPU para `performance`.
 4. Conectar o LUN USB com identidade `LIVETV1` e expor `TV AO VIVO 2.tp` para a TV.
 
@@ -144,8 +163,10 @@ O script cuidará de:
 ## 📖 Documentação Completa
 
 - [Arquitetura Detalhada](docs/ARCHITECTURE.md)
+- [Arquitetura VOD Cinema & Dual-Cache Prefetch](docs/VOD_ARCHITECTURE.md)
 - [Guia de Implantação Passo a Passo](docs/DEPLOYMENT_GUIDE.md)
 - [Especificações de Hardware da TV (MStar 2013)](docs/HARDWARE_SPECS.md)
+- [Sincronismo de Borda Viva e Isolamento de Sondagem](docs/LIVE_EDGE_LOCK_AND_PROBE_ISOLATION.md)
 - [Guia de Diagnóstico e Resolução de Problemas](docs/TROUBLESHOOTING.md)
 
 ---

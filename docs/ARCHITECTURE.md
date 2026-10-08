@@ -42,12 +42,13 @@ O sistema é dividido em três camadas desacopladas que se comunicam através de
 
 Ao contrário dos sistemas tradicionais que tentam gravar arquivos físicos no flash e truncá-los continuamente (o que destrói a memória flash do dispositivo móvel e corrompe tabelas FAT32), o **USB-Stream-TV** utiliza um driver em espaço de usuário (**FUSE**) que implementa uma partição NTFS virtual.
 
-### 2.1. Geometria Esparsa e Mapeamento de Setores
+### 2.1. Geometria Esparsa e Mapeamento de Setores (128 GiB Thin-Provisioned)
 
-O FUSE carrega um template estático de metadados NTFS de 8.0 GiB (`templates/ntfs_template.tar.gz`), gerado previamente:
-- **Setores Totais**: `16.777.215` setores de 512 bytes (~8.00 GiB).
+O FUSE carrega um template estático de metadados NTFS de 128 GiB (`templates/ntfs_template.sparse.gz`), descompactado via `src/tools/sparse_unpack_arm32` diretamente para o arquivo esparso `/data/local/tmp/ntfs_lab/ntfs_template.bin`:
+- **Setores Totais**: `268.435.456` setores de 512 bytes (~128.00 GiB).
 - **Tamanho do Cluster**: 4.096 bytes (8 setores).
-- **MFT Inode 27**: Registro MFT reservado para o arquivo de streaming. O atributo `$DATA` contém uma *runlist* mapeando três grandes extents que cobrem toda a área de dados da partição virtual.
+- **Pegada Física em Disco**: Graças ao suporte a arquivos esparsos no ext4 do Android, os 128 GiB virtuais consomem apenas **~69 MB reais** na partição flash `/data`.
+- **MFT Inode 27**: Registro MFT reservado para o arquivo de streaming. O atributo `$DATA` contém uma *runlist* mapeando grandes extents contíguos que cobrem toda a área de dados da partição virtual de 128 GiB.
 
 Quando a TV emite leituras SCSI para setores de metadados (Setor de Boot LBA 0, `$MFT`, `$Bitmap`, diretório raiz), o FUSE responde instantaneamente servindo os bytes correspondentes da imagem de metadados em RAM ou arquivo esparso.
 
@@ -94,9 +95,27 @@ A controladora USB 2.0 do tablet tem capacidade de fornecer dados a ~25–35 MB/
 - **Mecanismo de Pacing Suave**: Quando a margem de segurança entre `g_s_write` e o ponto de leitura da TV é menor que 8 MiB, o driver limita suavemente a taxa de entrega para ~1.0 MB/s.
 - Durante o sono (`usleep`), o mutex global `g_mu` é liberado para garantir que a thread de ingestão de rede (`feeder_thread`) nunca seja bloqueada.
 
+### 2.6. Ingestão Nativa e Resiliência de Rede (`src/client/stream_fetcher.c`)
+
+O `stream_fetcher` é o daemon em C nativo executado no processador Cortex-A7 do tablet Android. Ele ingere o fluxo MPEG-TS contínuo do servidor HTTP e alimenta o FIFO `/data/local/tmp/live_pipe` lido pelo `fuse_ntfs`. Suas garantias de estabilidade 24/7 incluem:
+
+1. **Parser HTTP Bulk de 4 KB (Zero-Stall)**:
+   - Elimina loops de leitura byte a byte (`recv(sock, &c, 1, 0)`), substituindo-os por leitura em bloco (`g_header_buf[4096]`).
+   - Qualquer payload de vídeo TS recebido junto aos cabeçalhos HTTP ou no delimitador chunked é preservado via ponteiro `body_start` e descarregado diretamente no pipeline sem perdas.
+2. **Clamping de Timeouts (<3.5s)**:
+   - O barramento SCSI do decodificador Samsung MStar aborta requisições após 3.5 a 4.0 segundos de silêncio.
+   - O `stream_fetcher` crava `poll()` em 2.500 ms e `SO_RCVTIMEO` / `SO_SNDTIMEO` em 3.000 ms, detectando sockets mortos e reconectando antes que a TV entre em pânico de I/O.
+3. **Resolução DNS Resiliente com Fallback**:
+   - Cache de IP resolved via `getaddrinfo` com fallback estático para o IP de produção caso o servidor DNS local falhe durante oscilações Wi-Fi.
+4. **Alinhamento e Compactação MPEG-TS de 188 Bytes**:
+   - O buffer acumulador (`g_acc`) descarta bytes antigos apenas em múltiplos estritos de 188 (`discard_len = to_discard - (to_discard % 188)`), preservando o fragmento terminal `< 188B` e pacotes inteiros anteriores para evitar qualquer descontinuidade de PCR ou corrupção de sincronismo (`0x47`).
+5. **Backpressure e Heartbeat Atômico**:
+   - Abertura de FIFO não-bloqueante (`O_NONBLOCK`) com multiplexação `POLLOUT` (timeout de 2.5s) para tratar reinicializações do `fuse_ntfs`.
+   - Atualização periódica de heartbeat via `futimens(hb_fd, NULL)` a cada 2.0s, eliminando 43.200 ciclos de abertura e truncamento (`O_TRUNC`) na memória flash por dia.
+
 ---
 
-## 3. Arquitetura Anti-Cache de Hardware
+## 3. Arquitetura Anti-Cache de Hardware e Temporização SCSI
 
 A TV Samsung ConnectShare 2013 possui cache agressivo em memória não-volátil (NVM). Se um pendrive for reconectado com o mesmo nome e serial, a TV tenta retomar a reprodução da última posição salva em segundos anteriores, travando a reprodução ao vivo.
 
@@ -122,6 +141,13 @@ Para eliminar completamente esse comportamento, o sistema implementa uma estrat�
 │    - Descarta qualquer cache de arquivo e resume do zero    │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### 3.1. Temporizações Canônicas de Barramento USB (`switch_tv_mode.sh`)
+Para que o host USB da TV processe os eventos de desconexão e conexão sem travar o stack SCSI:
+- **Teardown do Gadget**: Pausa de `0.8s` após desabilitar o gadget (`echo 0 > enable`).
+- **Desvinculação do LUN**: Pausa de `0.3s` após esvaziar o arquivo backing (`echo "" > lun0/file`).
+- **Inquiry Setup**: Pausa de `0.2s` após escrever a nova Inquiry String antes de reabilitar o gadget (`echo 1 > enable`).
+- **Fail-Safe Rollback (`fail_rollback`)**: Qualquer falha inesperada durante a troca de modo aciona o rollback imediato, restaurando o gadget USB com uma imagem válida para que a TV nunca permaneça em *"Dispositivo não reconhecido"*.
 
 ---
 
@@ -167,7 +193,8 @@ Para suportar conteúdos sob demanda (filmes MP4, gravações e vídeos do YouTu
 - **Conexão TCP Persistente (`TCP_NODELAY`)**: Conexão keep-alive dedicada com socket persistente e parser HTTP bulk em lote, eliminando o overhead de handshake e loops de leitura de 1 byte.
 - **Cancelamento Rápido em Seek**: Se o usuário realizar seek arbitrário além da janela pré-carregada, uma flag volátil `vod_prefetch_abort` sinaliza o encerramento do chunk corrente para sincronizar imediatamente com a nova posição.
 
-### 6.3. Scripts de Hot-Upgrade e Rollback Atômico
-- **`scripts/apply_vod_v2.sh`**: Atualização a quente sem indisponibilidade (*zero-downtime*) com validação estrita de integridade ELF (`\x7fELF` e tamanho mínimo >100 KB) e lock atômico baseado em diretório (`mode_switch.lock.dir`).
-- **`scripts/rollback_vod.sh`**: Procedimento determinístico de rollback de 1 comando com restauração do binário original, flags e remount limpo.
+### 6.3. Orquestração de Produção e Alternância Segura de Modos
+- **`scripts/deploy_tablet.sh`**: Implantação e atualização automatizada e atômica via ADB, instalando o template esparso de 128 GiB (`sparse_unpack_arm32`), binários estáticos compilados para ARM32 e scripts de watchdog.
+- **`scripts/switch_tv_mode.sh`**: Alternador atômico de modos de exibição (Live TV vs. VOD Cinema) com mecanismo `fail_rollback()` para recuperação automática em caso de erro, locks de concorrência com detecção de stale e atrasos calibrados de barramento SCSI.
+- **`scripts/tv_watchdog.sh`**: Daemon contínuo de supervisão que monitora o túnel reverso, estado do gadget USB, locks e processos essenciais (`fuse_ntfs`, `stream_fetcher`, `fuse_direct`), garantindo imunidade de workers durante trocas de canal.
 - Para especificações completas de engenharia e pipelines de transcodificação de VOD, consulte [docs/VOD_ARCHITECTURE.md](file:///home/sam/Code/usb-stream-tv-prod/docs/VOD_ARCHITECTURE.md).

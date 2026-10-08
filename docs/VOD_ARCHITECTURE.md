@@ -1,9 +1,8 @@
 # VOD Cinema & YouTube End-to-End Pipeline Architecture
 
 **Documento:** `docs/VOD_ARCHITECTURE.md`  
-**Branch:** `experiment/vod-cinema`  
-**Status:** PROPOSTA ARQUITETURAL / INVESTIGAÇÃO TÉCNICA (SEM IMPLEMENTAÇÃO DE CÓDIGO)  
-**Data:** 26/09/2026  
+**Status:** ARQUITETURA EM PRODUÇÃO (Implementado, Validado e Ativo em Produção 24/7)  
+**Data:** 08/10/2026  
 **Autores:** Equipe de Engenharia USB-Stream-TV & Antigravity  
 
 ---
@@ -295,6 +294,22 @@ Utilizar preferencialmente **Hardcoded Burn-in** via FFmpeg para conteúdo que e
 | ConnectShare frequentemente ignora arquivos `.srt` externos quando o container é `.ts` | `FORTE EVIDÊNCIA` | Padrão da stack de decodificação DVB/MPEG-TS das TVs Samsung 2012-2014. |
 | Legenda queimada (burn-in) é 100% universal e imune a incompatibilidades de firmware | `PROVADO` | Os caracteres passam a ser pixels da imagem H.264, sem depender do motor de OSD da TV. |
 | Limite de 64 MB de RAM para o daemon FUSE é suficiente para gerenciar múltiplos slots | `FORTE EVIDÊNCIA` | O FUSE apenas roteia leitura de blocos; dados VOD não ocupam buffer circular permanente. |
+
+---
+
+## 7. Implementação Consolidada em Produção (VOD V2 & Dual-Cache)
+
+O subsistema de VOD Cinema foi totalmente consolidado na base de produção através dos seguintes módulos:
+
+### 7.1. Motor Nativo FUSE Direct V2 (`src/client/fuse_direct_v2.c`)
+- **FUSE Head Pinning Cache (8 MB)**: Alocação permanente em RAM dos primeiros 8 MB da mídia com sincronização de mutex (`vod_head_mu`), garantindo resposta em 0 ms para as sondagens de cabeçalho MP4 (`ftyp`/`moov`) do decodificador ConnectShare.
+- **Dedicated Media Sliding Cache (16 MB)**: Double buffering com thread assíncrona de prefetch em blocos de 4 MB (`VOD_CHUNK_SZ`) e socket persistente keep-alive com `TCP_NODELAY`, prevenindo engasgos de I/O na TV.
+- **Multi-Arquivo e Suporte a Séries**: Encadeamento sintético de clusters FAT32 permitindo múltiplos episódios e filmes no mesmo pendrive virtual (`file_0.mp4`, `file_1.mp4`, etc.), com transição transparente e priming de RAM.
+
+### 7.2. Pipeline de Ingestão de Torrents e Vídeos (`torrent_downloader.py`)
+- Download assíncrono gerenciado via `aria2c` com detecção inteligente do arquivo de vídeo principal (filtrando samples e extras).
+- Extração e conversão de legendas `.srt` com normalização de codificação de caracteres (UTF-8, CP1252, Latin-1).
+- Transcodificação compatível com Samsung MStar: H.264 Main L4.1 + AC-3 estéreo 384k a 48 kHz com flag `-movflags +faststart` para colocação do átomo `moov` no início do contêiner.
 
 ---
 

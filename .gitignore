@@ -17,10 +17,11 @@ series_favorites.json
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
 .venv/
 env/
 
-# Imagens Binárias Pesadas Descompactadas (usar sempre templates/*.tar.gz)
+# Imagens Binárias Pesadas Descompactadas (usar sempre templates/*.sparse.gz)
 *.bin
 *.img
 scratch/

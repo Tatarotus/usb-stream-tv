@@ -89,10 +89,10 @@ cd ~/Code/usb-stream-tv-prod
 
 O script `deploy_tablet.sh`:
 - Cria a estrutura `/data/local/tmp/ntfs_lab/`.
-- Envia e descompacta o template de 8.0 GiB (`ntfs_template.tar.gz`).
-- Instala os binários compilados `fuse_ntfs`, `stream_fetcher` e `patch_trp` com permissões de execução.
-- Configura o watchdog de energia e CPU.
-- Inicia o serviço de TV ao vivo com pré-buffer de segurança.
+- Envia o template esparso de 128 GiB (`templates/ntfs_template.sparse.gz`) e descompacta via `src/tools/sparse_unpack_arm32` em `/data/local/tmp/ntfs_lab/ntfs_template.bin` (ocupando apenas ~69 MB reais).
+- Instala os binários compilados estáticos ARM32 (`fuse_ntfs`, `fuse_direct_arm32`, `stream_fetcher`, `patch_trp`, `sparse_unpack_arm32`) com permissões de execução.
+- Configura o watchdog de energia, wakelocks, túnel reverso e CPU governor para `performance`.
+- Inicia o serviço de TV ao vivo com pré-buffer de segurança e validação do barramento USB.
 
 ---
 

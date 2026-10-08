@@ -7,6 +7,7 @@ from server import CommandBus, CommandItem, resolve_vod_stream_url, HUB, dispatc
 class TestCommandBus(unittest.TestCase):
     def setUp(self):
         self.bus = CommandBus()
+        self.bus.seq = 0
 
     def test_submit_and_poll_v2(self):
         item = self.bus.submit("echo hello")

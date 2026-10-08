@@ -13,10 +13,10 @@ Este documento estabelece as regras obrigatórias e inegociáveis para qualquer 
    - `server.py`, `Dockerfile`, `compose.yaml`, `channels.json`: Raiz do projeto.
    - `dashboard.html`, `manifest.json`, `sw.js`, ícones PWA: Raiz do projeto (servidos diretamente pelo servidor web).
    - `src/ntfs/`: Código-fonte C e binários do driver FUSE NTFS (`fuse_ntfs.c`, `fuse_ntfs.h`, `fuse_ntfs_arm32`).
-   - `src/client/`: Ingestão de rede ultraleve (`stream_fetcher.c`, `stream_fetcher_arm32`).
-   - `src/tools/`: Utilitários de sistema de arquivos e MFT (`patch_trp.c`, `patch_trp_arm32`).
-   - `scripts/`: Automações operacionais do tablet (`deploy_tablet.sh`, `switch_tv_mode.sh`, `switch_live.sh`, `switch_vod.sh`, `reconnect_usb.sh`, `tv_watchdog.sh`).
-   - `templates/`: Templates compactados (`ntfs_template.tar.gz`). **Nunca commitar arquivos `.bin` descompactados de 8.5 GB.**
+   - `src/client/`: Ingestão de rede ultraleve e VOD Direct (`stream_fetcher.c`, `stream_fetcher_arm32`, `fuse_direct_v2.c`, `fuse_direct_arm32`).
+   - `src/tools/`: Utilitários de sistema de arquivos e MFT (`patch_trp.c`, `patch_trp_arm32`, `sparse_unpack.c`, `sparse_unpack_arm32`).
+   - `scripts/`: Automações operacionais do tablet (`deploy_tablet.sh`, `switch_tv_mode.sh`, `switch_live.sh`, `switch_vod.sh`, `reconnect_usb.sh`, `tv_watchdog.sh`, `pack_sparse_template.py`).
+   - `templates/`: Templates compactados (`ntfs_template.sparse.gz`). **Nunca commitar arquivos `.bin` descompactados de 128 GB.**
    - `docs/`: Documentação técnica completa.
 3. **Limpeza de Artefatos em Git**:
    - Antes de concluir qualquer tarefa, inspecione `git status`. Remova qualquer arquivo não rastreado que não faça parte formal da arquitetura de produção.

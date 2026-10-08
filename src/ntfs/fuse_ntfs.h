@@ -13,11 +13,12 @@
 #define BPS 512ULL
 #define SPC 8ULL
 #define CLUSTER_SIZE (BPS * SPC)                    /* 4096 bytes */
-#define NTFS_FILE_SIZE 8000000000ULL                /* Default single-file: 8,000,000,000 bytes */
-#define NTFS_TOTAL_SECTORS 16777216ULL              /* 8.0 GiB = 16,777,216 sectors */
-#define NTFS_DISK_SIZE (NTFS_TOTAL_SECTORS * BPS)   /* 8,589,934,592 bytes */
+#define NTFS_FILE_SIZE 128000000000ULL              /* 128,000,000,000 bytes (~59 hours continuous live playback) */
+#define NTFS_TOTAL_SECTORS 268435456ULL             /* 128.0 GiB = 268,435,456 sectors */
+#define NTFS_DISK_SIZE (NTFS_TOTAL_SECTORS * BPS)   /* 137,438,953,472 bytes */
 #define RINGSZ (128ULL * 1024 * 1024)               /* 128 MiB live ring buffer */
 
+#define NTFS_NUM_EXTENTS 3
 #define MAX_EXTENTS_PER_FILE 8
 #define MAX_VIRTUAL_FILES 32
 
@@ -35,43 +36,43 @@ struct ntfs_extent {
     uint64_t num_clusters;   /* Number of 4KiB clusters in this extent */
 };
 
-/* The 3 extents verified factually from the 8 GB NTFS prototype */
-static const struct ntfs_extent NTFS_EXTENTS[3] = {
+/* The 3 verified non-sparse extents for the 128 GiB NTFS live template */
+static const struct ntfs_extent NTFS_EXTENTS[NTFS_NUM_EXTENTS] = {
     {
         .id = 0,
         .vcn_start = 0ULL,
-        .vcn_end = 907017ULL,
-        .lcn_start = 1190133ULL,
-        .lcn_end = 2097150ULL,
+        .vcn_end = 1907387ULL,
+        .lcn_start = 23ULL,
+        .lcn_end = 1907410ULL,
         .file_start = 0ULL,
-        .file_end = 3715145728ULL,
-        .lba_start = 9521064ULL,
-        .lba_end = 16777207ULL,
-        .num_clusters = 907018ULL
+        .file_end = 7812661248ULL,
+        .lba_start = 184ULL,
+        .lba_end = 15259287ULL,
+        .num_clusters = 1907388ULL
     },
     {
         .id = 1,
-        .vcn_start = 907018ULL,
-        .vcn_end = 1693280ULL,
-        .lcn_start = 262312ULL,
-        .lcn_end = 1048574ULL,
-        .file_start = 3715145728ULL,
-        .file_end = 6935678976ULL,
-        .lba_start = 2098496ULL,
-        .lba_end = 8388599ULL,
-        .num_clusters = 786263ULL
+        .vcn_start = 1907388ULL,
+        .vcn_end = 14489169ULL,
+        .lcn_start = 4195433ULL,
+        .lcn_end = 16777214ULL,
+        .file_start = 7812661248ULL,
+        .file_end = 59347640320ULL,
+        .lba_start = 33563464ULL,
+        .lba_end = 134217719ULL,
+        .num_clusters = 12581782ULL
     },
     {
         .id = 2,
-        .vcn_start = 1693281ULL,
-        .vcn_end = 1953124ULL,
-        .lcn_start = 23ULL,
-        .lcn_end = 259866ULL,
-        .file_start = 6935678976ULL,
-        .file_end = 8000000000ULL,
-        .lba_start = 184ULL,
-        .lba_end = 2078935ULL,
-        .num_clusters = 259844ULL
+        .vcn_start = 14489170ULL,
+        .vcn_end = 31249999ULL,
+        .lcn_start = 16793601ULL,
+        .lcn_end = 33554430ULL,
+        .file_start = 59347640320ULL,
+        .file_end = 128000000000ULL,
+        .lba_start = 134348808ULL,
+        .lba_end = 268435447ULL,
+        .num_clusters = 16760830ULL
     }
 };
 
@@ -106,6 +107,11 @@ struct virtual_file {
     int http_sock;
     pthread_mutex_t vf_mu;
     pthread_cond_t vf_cv;
+    /* Pinned Head Cache */
+    uint8_t *head_cache;
+    size_t head_len;
+    int head_fetched;
+    uint64_t head_failed_until;
     /* Telemetry tracking */
     uint64_t tel_count;
     uint64_t tel_last_t_ms;
@@ -113,6 +119,8 @@ struct virtual_file {
     size_t   tel_last_sz;
     uint64_t tel_max_foff;
 };
+
+int ntfs_serve_disk(uint8_t *dst, uint64_t disk_offset, size_t n, uint64_t deadline_ms);
 
 /* Result codes for virtual_file_lookup */
 #define VIRT_RES_METADATA -1
@@ -161,7 +169,7 @@ static inline int ntfs_foff_to_lba(uint64_t foff,
     if (foff >= NTFS_FILE_SIZE) {
         return -1; /* EOF reached */
     }
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < NTFS_NUM_EXTENTS; i++) {
         if (foff >= NTFS_EXTENTS[i].file_start && foff < NTFS_EXTENTS[i].file_end) {
             uint64_t delta_bytes = foff - NTFS_EXTENTS[i].file_start;
             uint64_t delta_clusters = delta_bytes / CLUSTER_SIZE;
@@ -177,14 +185,14 @@ static inline int ntfs_foff_to_lba(uint64_t foff,
 }
 
 /* Maps an LBA sector and byte offset within sector back to virtual file offset (foff).
- * Returns extent index (0, 1, 2) if the sector belongs to TV AO VIVO.ts,
+ * Returns extent index (0..NTFS_NUM_EXTENTS-1) if the sector belongs to TV AO VIVO.ts,
  * or -1 if the sector is a filesystem metadata sector. */
 static inline int ntfs_lba_to_foff(uint64_t lba,
                                    size_t sec_off,
                                    uint64_t *out_foff,
                                    uint64_t *out_avail_in_extent)
 {
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < NTFS_NUM_EXTENTS; i++) {
         if (lba >= NTFS_EXTENTS[i].lba_start && lba <= NTFS_EXTENTS[i].lba_end) {
             uint64_t sec_delta = lba - NTFS_EXTENTS[i].lba_start;
             uint64_t foff = NTFS_EXTENTS[i].file_start + sec_delta * BPS + (uint64_t)sec_off;

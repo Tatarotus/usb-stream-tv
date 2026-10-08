@@ -39,6 +39,7 @@ YT_DLP_BIN = shutil.which("yt-dlp") or os.path.join(home_local_bin, "yt-dlp")
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", 8080))
 AUTH_PIN = os.environ.get("TV_PIN", "1233")
+TABLET_TOKEN = os.environ.get("TABLET_TOKEN", "").strip()
 STANDBY_TIMEOUT = float(os.environ.get("STANDBY_TIMEOUT", 90.0))
 XTREAM_UPSTREAM = os.environ.get("XTREAM_UPSTREAM", "")
 XTREAM_STREAM_RE = re.compile(r'^/(?:(live|movie|series)/)?([^/]+)/([^/]+)/(\d+)(?:\.([a-zA-Z0-9]+))?$')
@@ -1683,6 +1684,118 @@ def build_ffmpeg_cmd(url, audio_url=None, is_live=False, use_proxy=False, start_
     ])
     return cmd
 
+class CommandItem:
+    def __init__(self, cmd_id, cmd, dedupe_key=None, ttl=120.0):
+        self.id = cmd_id
+        self.cmd = cmd
+        self.dedupe_key = dedupe_key
+        self.ttl = ttl
+        self.created_at = time.time()
+        self.delivered_at = 0.0
+        self.delivery_count = 0
+        self.acked = False
+        self.rc = None
+        self.output = ""
+        self.event = threading.Event()
+
+class CommandBus:
+    """Barramento de comandos assíncrono com IDs monotônicos, controle de reentrega e ACKs."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.cv = threading.Condition(self.lock)
+        self.seq = int(time.time())
+        self.queue = collections.deque()
+        self.in_flight = {}
+        self.history = collections.OrderedDict()
+
+    def submit(self, cmd, dedupe_key=None, ttl=120.0):
+        with self.lock:
+            if dedupe_key:
+                for existing in list(self.queue):
+                    if existing.dedupe_key == dedupe_key:
+                        existing.cmd = cmd
+                        existing.created_at = time.time()
+                        return existing
+                for existing in list(self.in_flight.values()):
+                    if existing.dedupe_key == dedupe_key:
+                        if existing.cmd == cmd:
+                            return existing
+                        self.in_flight.pop(existing.id, None)
+                        break
+
+            self.seq += 1
+            item = CommandItem(self.seq, cmd, dedupe_key=dedupe_key, ttl=ttl)
+            self.queue.append(item)
+            self.cv.notify_all()
+            return item
+
+    def poll(self, wait_sec=0.0, nocmd=False, is_v2=True):
+        if nocmd:
+            return None
+
+        deadline = time.time() + max(0.0, wait_sec)
+        with self.lock:
+            while True:
+                now = time.time()
+
+                expired_ids = [cid for cid, it in self.in_flight.items() if now - it.created_at > it.ttl]
+                for cid in expired_ids:
+                    it = self.in_flight.pop(cid)
+                    it.event.set()
+                    self._record_history(it)
+
+                for cid, it in list(self.in_flight.items()):
+                    if now - it.delivered_at >= 8.0:
+                        it.delivered_at = now
+                        it.delivery_count += 1
+                        return f"{it.id}|{it.cmd}" if is_v2 else it.cmd
+
+                if self.queue:
+                    item = self.queue.popleft()
+                    item.delivered_at = now
+                    item.delivery_count = 1
+                    self.in_flight[item.id] = item
+                    return f"{item.id}|{item.cmd}" if is_v2 else item.cmd
+
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                self.cv.wait(timeout=min(remaining, 1.0))
+
+            return None
+
+    def ack(self, cmd_id, rc=0, output=""):
+        with self.lock:
+            item = self.in_flight.pop(cmd_id, None)
+            if not item:
+                item = self.history.get(cmd_id)
+            if item:
+                item.rc = rc
+                item.output = output
+                item.acked = True
+                item.event.set()
+                self._record_history(item)
+                return True
+            return False
+
+    def ack_legacy(self, output=""):
+        with self.lock:
+            if self.in_flight:
+                cid, item = next(iter(list(self.in_flight.items())))
+                self.in_flight.pop(cid)
+                item.rc = 0
+                item.output = output
+                item.acked = True
+                item.event.set()
+                self._record_history(item)
+                return True
+            return False
+
+    def _record_history(self, item):
+        self.history[item.id] = item
+        while len(self.history) > 50:
+            self.history.popitem(last=False)
+
 class StreamHub:
     """
     Hub de streaming central com arquitetura Make-Before-Break:
@@ -1728,12 +1841,14 @@ class StreamHub:
         self.pending_command = None
         self.command_output = None
         self.command_done_event = threading.Event()
+        self.bus = CommandBus()
         self.tablet_pending_cmd = None
         self.tablet_cmd_res = None
         self.tablet_cmd_event = threading.Event()
         self.tablet_last_seen = 0
         self.tablet_usb_state = "DISCONNECTED"
         self.tablet_usb_pwr = False
+        self.tablet_mode = "live"
 
         # Rolling pre-buffer para clientes novos (~60 MiB = ~100s a 120s de folga na TV)
         self.prebuffer_chunks = collections.deque()
@@ -2405,26 +2520,35 @@ class StreamHub:
 
 HUB = StreamHub()
 
-def dispatch_device_cmd(cmd):
-    """Envia comando para o dispositivo ativo (Tablet ou Xiaomi)."""
+def dispatch_device_cmd(cmd, dedupe_key=None):
+    """Envia comando para o dispositivo ativo (Tablet via CommandBus ou Xiaomi)."""
     log_event(f"DISPATCH_CMD {cmd}")
     print(f"[*] Disparando comando para aparelho: {cmd}")
     HUB.pending_command = f"su -c '{cmd}'"
     HUB.tablet_pending_cmd = cmd
 
+    if not dedupe_key and cmd:
+        if "switch_live" in cmd:
+            dedupe_key = "switch_live"
+        elif "switch_vod" in cmd:
+            dedupe_key = "switch_vod"
+
+    item = HUB.bus.submit(cmd, dedupe_key=dedupe_key)
+
     def _run_adb():
         for port in [25555, 25556]:
             try:
                 subprocess.run(["adb", "-s", f"127.0.0.1:{port}", "shell", f"su -c '{cmd}'"],
-                               timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               timeout=45, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 pass
     threading.Thread(target=_run_adb, daemon=True).start()
+    return item
 
 def resolve_vod_stream_url(url):
     """
-    Resolve redirecionamentos HTTP 302/301 e remove porta :80/ explícita
-    para evitar bloqueio 403 da Cloudflare/CDN em filmes e séries.
+    Resolve redirecionamentos HTTP 302/301 e remove porta :80 explícita
+    apenas no netloc para evitar bloqueio 403 da Cloudflare/CDN em filmes e séries.
     """
     if not (url.startswith("http://") or url.startswith("https://")):
         return url
@@ -2444,13 +2568,19 @@ def resolve_vod_stream_url(url):
                 }))
             opener = urllib.request.build_opener(*handlers)
             req = urllib.request.Request(url, headers={"User-Agent": "IPTVSmartersPro"})
-            opener.open(req, timeout=5)
+            with opener.open(req, timeout=5) as resp:
+                pass
             return url
         except urllib.error.HTTPError as e:
             if e.code in (301, 302, 303, 307, 308):
                 loc = e.headers.get("Location")
                 if loc:
-                    clean_loc = loc.replace(":80/", "/")
+                    p = urllib.parse.urlsplit(loc)
+                    if p.port == 80 and p.netloc:
+                        clean_netloc = p.netloc.replace(":80", "")
+                        clean_loc = urllib.parse.urlunsplit((p.scheme, clean_netloc, p.path, p.query, p.fragment))
+                    else:
+                        clean_loc = loc
                     print(f"[✓] VOD Redirecionamento resolvido: {clean_loc[:70]}...")
                     return clean_loc
             return url
@@ -3089,12 +3219,18 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_HEAD(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path in ("/api/tablet_cmd", "/api/tablet_ack", "/api/tablet_cmd_res"):
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            return
         self.do_GET()
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
-        query = urllib.parse.parse_qs(parsed.query)
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
 
         if path == "/":
             self.send_dashboard()
@@ -3159,27 +3295,50 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path.startswith("/remote/"):
             self.handle_remote_play(path)
         elif path == "/api/tablet_cmd":
+            token = query.get("k", [""])[0].strip()
+            if TABLET_TOKEN and token != TABLET_TOKEN:
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"Forbidden")
+                return
+
+            is_v2 = (query.get("v", ["1"])[0] == "2")
+            nocmd = (query.get("nocmd", ["0"])[0] == "1")
             usb_st = query.get("usb", [""])[0]
             usb_pwr = query.get("pwr", [""])[0]
             tablet_vod = query.get("vod", [""])[0].strip()
+            tablet_mode = query.get("mode", [""])[0].strip()
+
             HUB.tablet_last_seen = time.time()
             if usb_st:
                 HUB.tablet_usb_state = usb_st
             if usb_pwr:
                 HUB.tablet_usb_pwr = (usb_pwr == "1")
-            if tablet_vod:
+            if tablet_mode:
+                HUB.tablet_mode = tablet_mode
+
+            if tablet_vod and tablet_vod.lower() not in ("none", "-", "0", ""):
                 HUB.tablet_vod_mode = tablet_vod
                 touch_vod_stream(tablet_vod)
-            elif "vod" in query and not tablet_vod:
+            else:
                 HUB.tablet_vod_mode = ""
-                if ACTIVE_VOD_TASK and (time.time() - LAST_VOD_STREAM_TIME > 30):
+                if ACTIVE_VOD_TASK and (time.time() - LAST_VOD_STREAM_TIME > 15):
                     set_active_vod(None)
-            cmd = HUB.tablet_pending_cmd or "none"
+
+            cmd_str = HUB.bus.poll(nocmd=nocmd, is_v2=is_v2)
+            resp_text = cmd_str if cmd_str else "none"
             HUB.tablet_pending_cmd = None
+
+            resp_bytes = resp_text.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(resp_bytes)))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.end_headers()
-            self.wfile.write(cmd.encode("utf-8"))
+            self.wfile.write(resp_bytes)
+        elif path == "/api/tablet_ack":
+            self.handle_tablet_ack()
         elif path == "/api/logo":
             self.proxy_logo(query.get("url", [""])[0])
         elif path == "/api/proxy_stream":
@@ -3660,6 +3819,8 @@ self.addEventListener('message', (event) => {
             self.handle_remote_exec()
         elif path == "/api/tablet_cmd_res":
             self.handle_tablet_cmd_res()
+        elif path == "/api/tablet_ack":
+            self.handle_tablet_ack()
         elif path == "/api/tablet_exec":
             self.handle_tablet_exec()
         elif path == "/api/reset_epoch":
@@ -4411,11 +4572,47 @@ self.addEventListener('message', (event) => {
         self.end_headers()
         self.wfile.write(res)
 
+    def handle_tablet_ack(self):
+        parsed = urllib.parse.urlparse(self.path)
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        token = query.get("k", [""])[0].strip()
+        if TABLET_TOKEN and token != TABLET_TOKEN:
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": "Forbidden"}).encode("utf-8"))
+            return
+
+        cmd_id_str = query.get("id", ["0"])[0]
+        try:
+            cmd_id = int(cmd_id_str)
+        except Exception:
+            cmd_id = 0
+
+        rc_str = query.get("rc", ["0"])[0]
+        try:
+            rc = int(rc_str)
+        except Exception:
+            rc = 0
+
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8", errors="replace") if length > 0 else ""
+
+        acked = HUB.bus.ack(cmd_id, rc=rc, output=body)
+        res = json.dumps({"success": True, "acked": acked, "id": cmd_id}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(res)))
+        self.end_headers()
+        self.wfile.write(res)
+
     def handle_tablet_cmd_res(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode("utf-8", errors="replace") if length > 0 else ""
         HUB.tablet_cmd_res = body
         HUB.tablet_cmd_event.set()
+        HUB.bus.ack_legacy(output=body)
         res = json.dumps({"success": True}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -4454,9 +4651,11 @@ self.addEventListener('message', (event) => {
             return
         HUB.tablet_cmd_event.clear()
         HUB.tablet_cmd_res = None
-        HUB.tablet_pending_cmd = cmd
-        HUB.tablet_cmd_event.wait(timeout=10.0)
-        res = json.dumps({"success": True, "output": HUB.tablet_cmd_res or "Timeout aguardando tablet (watchdog ativo?)."}).encode("utf-8")
+        item = dispatch_device_cmd(cmd)
+        success = item.event.wait(timeout=15.0) if hasattr(item, "event") else False
+        output = item.output if success else (HUB.tablet_cmd_res or "Timeout aguardando execução no tablet (watchdog ativo?).")
+        rc = getattr(item, "rc", 0)
+        res = json.dumps({"success": True, "output": output, "rc": rc}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")

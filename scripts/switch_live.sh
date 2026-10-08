@@ -1,29 +1,13 @@
 #!/system/bin/sh
 # switch_live.sh — Retorna do Modo VOD para a TV Ao Vivo
-# Suporta tanto o Tablet SM-T110 quanto o Xiaomi Mi A2
-[ ! -x "/system/bin/sh" ] && exec /system/xbin/busybox sh "$0" "$@"
+# Encaminha para o motor unificado e atomico em switch_tv_mode.sh
+trap '' HUP
 
-LOCAL_DIR="/data/local/tmp"
-FLAG_FILE="$LOCAL_DIR/vod_mode.flag"
-
-echo "[*] Restaurando modo TV Ao Vivo..."
-rm -f "$FLAG_FILE"
-
-# Parar FUSE VOD
-pkill -9 -f "[f]use_direct" 2>/dev/null || true
-umount -l "$LOCAL_DIR/vfat_mnt" 2>/dev/null || true
-sleep 1
-
-# Executa o inicializador limpo correspondente ao aparelho
 if [ -x "/system/xbin/switch_tv_mode.sh" ]; then
-    echo "[*] Reiniciando stack do Tablet..."
-    /system/xbin/switch_tv_mode.sh live
-elif [ -x "/system/xbin/start_tv.sh" ]; then
-    echo "[*] Reiniciando stack do Tablet..."
-    /system/xbin/start_tv.sh
-elif [ -x "$LOCAL_DIR/start_clean.sh" ]; then
-    echo "[*] Reiniciando stack do Xiaomi Mi A2..."
-    sh "$LOCAL_DIR/start_clean.sh"
+    exec /system/xbin/switch_tv_mode.sh live "$@"
+elif [ -x "/data/local/tmp/switch_tv_mode.sh" ]; then
+    exec /data/local/tmp/switch_tv_mode.sh live "$@"
+else
+    echo "[!] switch_tv_mode.sh nao encontrado!"
+    exit 1
 fi
-
-echo "[✓] TV Ao Vivo restaurada na TV com sucesso!"

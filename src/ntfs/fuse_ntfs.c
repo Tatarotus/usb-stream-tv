@@ -32,7 +32,23 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <linux/fuse.h>
+#include <netdb.h>
+#include <poll.h>
+#include <stdbool.h>
+#include <stdatomic.h>
+#include <ucontext.h>
 
+static inline uint64_t get_le64(const void *p) {
+    uint64_t v;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
+
+static inline uint32_t get_le32(const void *p) {
+    uint32_t v;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
 
 #define FILE_NAME "tv_stream.img"
 #define FILE_INO 2
@@ -61,7 +77,7 @@ static uint64_t g_epoch = 0;
 static int g_base_valid = 0;
 static int g_have_data = 0;
 static int g_test_pattern_mode = 0;
-static volatile int g_running = 1;
+static atomic_bool g_running = true;
 static uint64_t g_prev_Fend = (uint64_t)-1;
 static uint64_t g_last_file_read_ms = 0;
 static uint64_t g_last_tv_stream_pos = 0;
@@ -117,20 +133,28 @@ static void *switch_worker_thread(void *arg) {
         setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
+        const char *vps_ip = getenv("VPS_SWITCH_IP");
+        if (!vps_ip) vps_ip = "129.146.5.64";
+        const char *vps_pin = getenv("VPS_SWITCH_PIN");
+        if (!vps_pin) vps_pin = "1233";
+        const char *vps_host = getenv("VPS_SWITCH_HOST");
+        if (!vps_host) vps_host = "tv.smre.run.place";
+
         struct sockaddr_in sin;
         memset(&sin, 0, sizeof(sin));
         sin.sin_family = AF_INET;
         sin.sin_port = htons(80);
-        inet_pton(AF_INET, "129.146.5.64", &sin.sin_addr);
+        inet_pton(AF_INET, vps_ip, &sin.sin_addr);
 
         if (connect(s, (struct sockaddr *)&sin, sizeof(sin)) == 0) {
             char req[256];
             int req_len = snprintf(req, sizeof(req),
-                "GET /api/switch_channel?id=%s&pin=1233&no_reconnect=1 HTTP/1.1\r\n"
-                "Host: tv.smre.run.place\r\n"
-                "Connection: close\r\n\r\n", sa->id);
+                "GET /api/switch_channel?id=%s&pin=%s&no_reconnect=1 HTTP/1.1\r\n"
+                "Host: %s\r\n"
+                "Connection: close\r\n\r\n", sa->id, vps_pin, vps_host);
             if (req_len > 0) {
-                (void)write(s, req, (size_t)req_len);
+                ssize_t w = send(s, req, (size_t)req_len, MSG_NOSIGNAL);
+                (void)w;
             }
         }
         close(s);
@@ -173,14 +197,17 @@ static uint64_t g_tel_start_ms = 0;
 
 static void wait_step(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    clock_gettime(CLOCK_MONOTONIC, &ts);
     ts.tv_sec += 1;
     pthread_cond_timedwait(&g_cv, &g_mu, &ts);
 }
 
 static void fill_null(uint8_t *dst, size_t n) {
     size_t off = 0, frag = n % 188;
-    if (frag) { memset(dst, 0, frag); off = frag; }
+    if (frag) {
+        memcpy(dst, NULL_PKT, frag);
+        off = frag;
+    }
     for (; off + 188 <= n; off += 188) memcpy(dst + off, NULL_PKT, 188);
 }
 
@@ -372,7 +399,7 @@ static int __attribute__((unused)) snap_open_base(uint64_t *out_base) {
     return snap_open_base_target(target, out_base);
 }
 
-static void __attribute__((unused)) randomize_volume_serial(void) {
+static void randomize_volume_serial(void) {
     int fd = open("/dev/urandom", O_RDONLY);
     if (fd >= 0) {
         if (read(fd, g_current_volume_serial, 8) != 8) {
@@ -389,10 +416,10 @@ static void __attribute__((unused)) randomize_volume_serial(void) {
     fprintf(stderr, "[SERIAL] New NTFS Volume Serial Number: 0x%016llx\n", (unsigned long long)s_val);
 
     if (g_meta_fd >= 0) {
-        pwrite(g_meta_fd, g_current_volume_serial, 8, 0x48);
-        if (g_total_sectors > 0) {
-            off_t backup_vbr_off = (off_t)((g_total_sectors - 1) * 512 + 0x48);
-            pwrite(g_meta_fd, g_current_volume_serial, 8, backup_vbr_off);
+        /* Only patch primary VBR at sector 0. Backup VBR at 128GB is intercepted and
+         * dynamically patched in-memory by ntfs_serve_disk() without extending sparse templates. */
+        if (pwrite(g_meta_fd, g_current_volume_serial, 8, 0x48) < 0) {
+            /* ignored */
         }
     }
 }
@@ -410,12 +437,6 @@ static void on_open(void) {
         g_base_valid = 1;
         pthread_mutex_unlock(&g_mu);
         return;
-    }
-
-    /* Wait up to 5s for initial stream feeder data to reach MIN_STREAM_START */
-    uint64_t t0 = now_ms();
-    while (g_s_write < MIN_STREAM_START && now_ms() - t0 < 5000 && g_running) {
-        wait_step();
     }
 
     g_anchor_foff = (uint64_t)-1;
@@ -484,18 +505,20 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
      * Forward jumps to foff >= 8MB during grace period are ALWAYS probes and MUST NOT re-anchor! */
     int is_opening_grace = (g_anchor_birth_ms != 0 && (now - g_anchor_birth_ms < 10000ULL) && g_anchor_foff <= 4ULL * 1024 * 1024);
 
-    /* Volume check: A real user seek/jump reads multiple full blocks (>= 4 blocks AND >= 1 MB).
-     * ConnectShare's transient metadata probes (16KB, 32KB, 64KB, 128KB = ~368KB total) never reach 1 MB. */
-    int is_confirmed_jump = (!is_seq_read &&
-                             !is_opening_grace &&
-                             g_probe_consecutive_count >= 4 &&
-                             g_probe_accumulated_bytes >= 1ULL * 1024 * 1024);
-
     uint64_t s_probe = foff_to_stream_pos(foff);
     int is_future_probe = (s_probe >= g_s_write + 2ULL * 1024 * 1024 && !is_seq_read);
     int is_behind_probe = (s_probe < ring_old && !is_seq_read);
 
-    if (g_base_valid && foff >= 8ULL * 1024 * 1024 && (is_future_probe || is_behind_probe) && !is_confirmed_jump) {
+    /* Volume check: A real user seek/jump reads multiple full blocks within the active stream window.
+     * Probes into the unwritten future (e.g. 128GB file end, 12GB) or behind ring buffer are NEVER user seeks! */
+    int is_confirmed_jump = (!is_seq_read &&
+                             !is_opening_grace &&
+                             !is_future_probe &&
+                             !is_behind_probe &&
+                             g_probe_consecutive_count >= 4 &&
+                             g_probe_accumulated_bytes >= 1ULL * 1024 * 1024);
+
+    if (g_base_valid && foff >= 8ULL * 1024 * 1024 && (is_future_probe || is_behind_probe)) {
         fill_null(dst, c);
         /* DO NOT update g_prev_Fend here! Keep active playback chain intact */
         return;
@@ -522,11 +545,19 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
     }
 
     if (is_reopen) {
+        s_last_pace_ms = 0; /* Reset pacing state on reopen / re-anchor (ALTO 3) */
         /* Pre-buffering protection: Ensure feeder has buffered at least MIN_STREAM_START */
         if (g_s_write < MIN_STREAM_START) {
             uint64_t wait_t0 = now_ms();
-            while (g_s_write < MIN_STREAM_START && now_ms() - wait_t0 < 5000 && g_running) {
+            uint64_t lim = deadline_ms;
+            uint64_t t1 = wait_t0 + 1200; /* Never exceed SCSI timeout window (CRÍTICO 3) */
+            if (t1 < lim) lim = t1;
+            while (g_s_write < MIN_STREAM_START && now_ms() < lim && g_running) {
                 wait_step();
+            }
+            if (g_s_write < MIN_STREAM_START) {
+                fill_null(dst, c);
+                return;
             }
         }
         if (g_have_data && g_s_write > 0) {
@@ -642,9 +673,13 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
                         uint64_t diff_ms = target_ms - elapsed_ms;
                         if (diff_ms > max_clamp_ms) diff_ms = max_clamp_ms;
                         uint64_t sleep_us = diff_ms * 1000ULL;
+                        uint64_t saved_epoch = g_epoch;
                         pthread_mutex_unlock(&g_mu);
                         usleep((useconds_t)sleep_us);
                         pthread_mutex_lock(&g_mu);
+                        if (g_epoch != saved_epoch || !g_base_valid) {
+                            continue;
+                        }
                     }
                 }
                 s_last_pace_ms = now_ms();
@@ -671,9 +706,14 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
                 fill_null(dst + fo, cc);
                 uint64_t pace_ms = (uint64_t)cc * 1000ULL / (600ULL * 1024ULL);
                 if (pace_ms > 50) pace_ms = 50; /* Strictly clamped to <= 50ms (AGENTS.md §2.2) */
+                uint64_t saved_epoch = g_epoch;
                 pthread_mutex_unlock(&g_mu);
                 usleep((useconds_t)(pace_ms * 1000ULL));
                 pthread_mutex_lock(&g_mu);
+                if (g_epoch != saved_epoch || !g_base_valid) {
+                    fo += cc;
+                    continue;
+                }
                 fo += cc;
                 continue;
             }
@@ -694,62 +734,232 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
 }
 
 /* =========================================================================
- *  VOD HTTP RANGE CLIENT & PROCESSING/READY STATE MACHINE
+ *  VOD DUAL-CACHE & PREFETCH ENGINE (Ported & Adapted from fuse_direct_v2)
  * ========================================================================= */
-static int http_connect(const char *host, int port) {
+#define VOD_HEAD_SZ  (8ULL * 1024 * 1024)   /* 8 MB VOD Head Pinning Cache */
+#define VOD_MEDIA_SZ (16ULL * 1024 * 1024)  /* 16 MB Dedicated VOD Media Buffer */
+#define VOD_CHUNK_SZ (4ULL * 1024 * 1024)   /* 4 MB Chunk Fetch Size */
+
+static uint8_t vod_media_buf1[VOD_MEDIA_SZ];
+static uint8_t vod_media_buf2[VOD_MEDIA_SZ];
+static uint8_t *vod_media_cache = vod_media_buf1;
+static uint8_t *vod_prefetch_buf = vod_media_buf2;
+
+static int vod_media_fi = -1;
+static uint64_t vod_media_start = (uint64_t)-1;
+static size_t vod_media_len = 0;
+
+static int vod_prefetch_fi = -1;
+static uint64_t vod_prefetch_start = (uint64_t)-1;
+static size_t vod_prefetch_len = 0;
+static int vod_prefetch_ready = 0;        /* 1 if vod_prefetch_buf has valid data */
+static int vod_prefetch_in_progress = 0;  /* 1 if background thread is downloading */
+static int vod_prefetch_target_fi = -1;
+static uint64_t vod_prefetch_target = (uint64_t)-1;
+
+static pthread_t vod_prefetch_tid;
+static pthread_mutex_t vod_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t vod_prefetch_cv;    /* wakes prefetch worker */
+static pthread_cond_t vod_done_cv;        /* wakes thread waiting on prefetch */
+static int vod_prefetch_requested = 0;
+static volatile int vod_prefetch_abort = 0;
+static int vod_prefetch_thread_started = 0;
+
+static int vod_fg_sock = -1;
+static char vod_fg_host[64] = {0};
+static int vod_fg_port = 0;
+
+static int vod_bg_sock = -1;
+static char vod_bg_host[64] = {0};
+static int vod_bg_port = 0;
+static pthread_mutex_t vod_bg_sock_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void vod_bg_sock_set(int s, const char *host, int port) {
+    pthread_mutex_lock(&vod_bg_sock_mu);
+    vod_bg_sock = s;
+    if (host) strncpy(vod_bg_host, host, sizeof(vod_bg_host) - 1);
+    vod_bg_port = port;
+    pthread_mutex_unlock(&vod_bg_sock_mu);
+}
+
+static void vod_bg_sock_close(void) {
+    pthread_mutex_lock(&vod_bg_sock_mu);
+    int s = vod_bg_sock;
+    vod_bg_sock = -1;
+    vod_bg_host[0] = '\0';
+    vod_bg_port = 0;
+    pthread_mutex_unlock(&vod_bg_sock_mu);
+    if (s >= 0) close(s);
+}
+
+static void vod_bg_sock_shutdown(void) {
+    pthread_mutex_lock(&vod_bg_sock_mu);
+    if (vod_bg_sock >= 0) {
+        shutdown(vod_bg_sock, SHUT_RDWR);
+    }
+    pthread_mutex_unlock(&vod_bg_sock_mu);
+}
+
+static void vod_close_sock(int *sock_ptr) {
+    if (!sock_ptr) return;
+    if (sock_ptr == &vod_bg_sock) {
+        vod_bg_sock_close();
+    } else {
+        if (*sock_ptr >= 0) {
+            close(*sock_ptr);
+            *sock_ptr = -1;
+        }
+        vod_fg_host[0] = '\0';
+        vod_fg_port = 0;
+    }
+}
+
+static int vod_resolve_host(const char *host, int port, struct sockaddr_in *out_sin) {
+    memset(out_sin, 0, sizeof(*out_sin));
+    out_sin->sin_family = AF_INET;
+    out_sin->sin_port = htons((uint16_t)port);
+
+    if (inet_pton(AF_INET, host, &out_sin->sin_addr) == 1) {
+        return 0;
+    }
+
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    int rc = getaddrinfo(host, port_str, &hints, &res);
+    if (rc == 0 && res) {
+        struct sockaddr_in *sin = (struct sockaddr_in *)(void *)res->ai_addr;
+        out_sin->sin_addr = sin->sin_addr;
+        freeaddrinfo(res);
+        return 0;
+    }
+    if (res) freeaddrinfo(res);
+    return -1;
+}
+
+static int vod_connect_sock(int *sock_ptr, const char *host, int port) {
+    if (!sock_ptr || !host) return -1;
+    vod_close_sock(sock_ptr);
+
+    struct sockaddr_in saddr;
+    if (vod_resolve_host(host, port, &saddr) < 0) {
+        fprintf(stderr, "[VOD] Failed to resolve host %s\n", host);
+        return -1;
+    }
+
     int s = socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0) return -1;
 
-    struct timeval tv = { .tv_sec = 4, .tv_usec = 0 };
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    int nodelay = 1;
-    setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-
-    struct sockaddr_in sin;
-    memset(&sin, 0, sizeof(sin));
-    sin.sin_family = AF_INET;
-    sin.sin_port = htons((uint16_t)port);
-
-    if (inet_pton(AF_INET, host, &sin.sin_addr) <= 0) {
-        /* Fallback to hardcoded Oracle VPS IP */
-        inet_pton(AF_INET, "129.146.5.64", &sin.sin_addr);
-    }
-
-    if (connect(s, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
+    int flags = fcntl(s, F_GETFL, 0);
+    if (flags < 0 || fcntl(s, F_SETFL, flags | O_NONBLOCK) < 0) {
         close(s);
         return -1;
     }
-    return s;
-}
 
-static ssize_t http_fetch_range(struct virtual_file *vf, uint64_t start, size_t len, uint8_t *dst) {
-    if (start >= vf->file_size) return 0;
-    if (start + (uint64_t)len > vf->file_size) {
-        len = (size_t)(vf->file_size - start);
+    int res = connect(s, (struct sockaddr *)&saddr, sizeof(saddr));
+    if (res < 0) {
+        if (errno != EINPROGRESS) {
+            close(s);
+            return -1;
+        }
+
+        struct pollfd pfd;
+        pfd.fd = s;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+
+        int pr = poll(&pfd, 1, 5000);
+        if (pr <= 0) {
+            close(s);
+            return -1;
+        }
+
+        int err = 0;
+        socklen_t errlen = sizeof(err);
+        if (getsockopt(s, SOL_SOCKET, SO_ERROR, &err, &errlen) < 0 || err != 0) {
+            close(s);
+            return -1;
+        }
     }
 
-    uint64_t end = start + (uint64_t)len - 1;
+    if (fcntl(s, F_SETFL, flags) < 0) {
+        close(s);
+        return -1;
+    }
+
+    struct timeval tv = { .tv_sec = 6, .tv_usec = 0 };
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    int nodelay = 1;
+    setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
+    int keepalive = 1;
+    setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
+
+    if (sock_ptr == &vod_bg_sock) {
+        vod_bg_sock_set(s, host, port);
+    } else {
+        *sock_ptr = s;
+        strncpy(vod_fg_host, host, sizeof(vod_fg_host) - 1);
+        vod_fg_port = port;
+    }
+    return 0;
+}
+
+static int vod_http_fetch_chunk(int *sock_ptr, const char *host, int port,
+                                const char *path, uint64_t file_size,
+                                uint8_t *dst, uint64_t start_off, size_t chunk_sz,
+                                size_t *out_len, volatile int *abort_flag,
+                                uint64_t deadline_ms) {
+    if (!sock_ptr || !host || !path || file_size == 0 || start_off >= file_size || chunk_sz == 0) return -1;
+
+    if (start_off + (uint64_t)chunk_sz > file_size) {
+        chunk_sz = (size_t)(file_size - start_off);
+    }
+    uint64_t fetch_end = start_off + (uint64_t)chunk_sz - 1;
 
     for (int retry = 0; retry < 2; retry++) {
-        if (vf->http_sock < 0) {
-            vf->http_sock = http_connect(vf->http_host, vf->http_port);
-            if (vf->http_sock < 0) {
-                fprintf(stderr, "[HTTP_RANGE_ERR] connect failed to %s:%d\n", vf->http_host, vf->http_port);
-                return -1;
+        if (now_ms() >= deadline_ms) {
+            vod_close_sock(sock_ptr);
+            return -1;
+        }
+
+        if (abort_flag && *abort_flag) {
+            vod_close_sock(sock_ptr);
+            return -1;
+        }
+
+        int needs_connect = (*sock_ptr < 0);
+        if (!needs_connect) {
+            if (sock_ptr == &vod_bg_sock) {
+                if (strcmp(vod_bg_host, host) != 0 || vod_bg_port != port) needs_connect = 1;
+            } else {
+                if (strcmp(vod_fg_host, host) != 0 || vod_fg_port != port) needs_connect = 1;
+            }
+        }
+        if (needs_connect) {
+            if (vod_connect_sock(sock_ptr, host, port) < 0) {
+                usleep(100000);
+                continue;
             }
         }
 
         char req[512];
         int req_len;
-        if (vf->http_port == 80) {
+        if (port == 80) {
             req_len = snprintf(req, sizeof(req),
                 "GET %s HTTP/1.1\r\n"
                 "Host: %s\r\n"
                 "Range: bytes=%" PRIu64 "-%" PRIu64 "\r\n"
                 "Connection: keep-alive\r\n"
                 "User-Agent: USBStreamTV-VOD/2.0\r\n\r\n",
-                vf->http_path, vf->http_host, start, end);
+                path, host, start_off, fetch_end);
         } else {
             req_len = snprintf(req, sizeof(req),
                 "GET %s HTTP/1.1\r\n"
@@ -757,115 +967,546 @@ static ssize_t http_fetch_range(struct virtual_file *vf, uint64_t start, size_t 
                 "Range: bytes=%" PRIu64 "-%" PRIu64 "\r\n"
                 "Connection: keep-alive\r\n"
                 "User-Agent: USBStreamTV-VOD/2.0\r\n\r\n",
-                vf->http_path, vf->http_host, vf->http_port, start, end);
+                path, host, port, start_off, fetch_end);
         }
 
-        if (write(vf->http_sock, req, (size_t)req_len) != req_len) {
-            fprintf(stderr, "[HTTP_RANGE_ERR] write failed for %s\n", vf->http_path);
-            close(vf->http_sock);
-            vf->http_sock = -1;
+        ssize_t w = send(*sock_ptr, req, (size_t)req_len, MSG_NOSIGNAL);
+        if (w != (ssize_t)req_len) {
+            vod_close_sock(sock_ptr);
             continue;
         }
 
-        char hdr_buf[1024];
-        size_t hdr_bytes = 0;
-        int hdr_done = 0;
-        while (hdr_bytes < sizeof(hdr_buf) - 1) {
-            char c;
-            ssize_t r = read(vf->http_sock, &c, 1);
+        char hbuf[4096];
+        size_t hlen = 0;
+        char *hdr_end = NULL;
+
+        while (hlen < sizeof(hbuf) - 1) {
+            if (now_ms() >= deadline_ms) {
+                vod_close_sock(sock_ptr);
+                return -1;
+            }
+            if (abort_flag && *abort_flag) {
+                vod_close_sock(sock_ptr);
+                return -1;
+            }
+            ssize_t r = recv(*sock_ptr, hbuf + hlen, sizeof(hbuf) - 1 - hlen, 0);
             if (r <= 0) break;
-            hdr_buf[hdr_bytes++] = c;
-            hdr_buf[hdr_bytes] = '\0';
-            if (hdr_bytes >= 4 && memcmp(hdr_buf + hdr_bytes - 4, "\r\n\r\n", 4) == 0) {
-                hdr_done = 1;
-                break;
+            size_t old_len = hlen;
+            hlen += (size_t)r;
+            hbuf[hlen] = '\0';
+            size_t scan_start = (old_len >= 3) ? (old_len - 3) : 0;
+            hdr_end = strstr(hbuf + scan_start, "\r\n\r\n");
+            if (hdr_end) break;
+        }
+
+        if (!hdr_end) {
+            vod_close_sock(sock_ptr);
+            continue;
+        }
+
+        char *body_start = hdr_end + 4;
+        *hdr_end = '\0';
+
+        int status_code = 0;
+        if (sscanf(hbuf, "HTTP/1.%*d %d", &status_code) != 1 || (status_code != 200 && status_code != 206)) {
+            fprintf(stderr, "[VOD] Unexpected HTTP status: %d\n", status_code);
+            vod_close_sock(sock_ptr);
+            continue;
+        }
+
+        if (start_off != 0 && status_code != 206) {
+            fprintf(stderr, "[VOD] Upstream server ignored Range request for offset %" PRIu64 " (status %d != 206)\n",
+                    start_off, status_code);
+            vod_close_sock(sock_ptr);
+            continue;
+        }
+
+        if (status_code == 206) {
+            char *cr_str = strcasestr(hbuf, "Content-Range:");
+            if (cr_str) {
+                uint64_t cr_start = 0;
+                if (sscanf(cr_str + 14, " bytes %" PRIu64, &cr_start) == 1 ||
+                    sscanf(cr_str + 14, " bytes=%" PRIu64, &cr_start) == 1 ||
+                    sscanf(cr_str + 14, " %" PRIu64, &cr_start) == 1) {
+                    if (cr_start != start_off) {
+                        fprintf(stderr, "[VOD] Mismatched Content-Range start: got %" PRIu64 ", wanted %" PRIu64 "\n",
+                                cr_start, start_off);
+                        vod_close_sock(sock_ptr);
+                        continue;
+                    }
+                }
             }
         }
 
-        int status_code = 0;
-        if (sscanf(hdr_buf, "HTTP/1.%*d %d", &status_code) != 1) {
-            status_code = -1;
-        }
-
-        if (!hdr_done || (status_code != 206 && status_code != 200)) {
-            fprintf(stderr, "[HTTP_RANGE_ERR] bad status=%d or header incomplete (hdr_bytes=%zu, retry=%d)\n",
-                    status_code, hdr_bytes, retry);
-            close(vf->http_sock);
-            vf->http_sock = -1;
+        if (strcasestr(hbuf, "Transfer-Encoding: chunked")) {
+            fprintf(stderr, "[VOD] Chunked transfer encoding not supported for VOD seek chunk\n");
+            vod_close_sock(sock_ptr);
             continue;
         }
 
-        size_t read_bytes = 0;
-        while (read_bytes < len) {
-            ssize_t r = read(vf->http_sock, dst + read_bytes, len - read_bytes);
-            if (r <= 0) break;
-            read_bytes += (size_t)r;
+        int close_after_read = 0;
+        size_t expected_len = chunk_sz;
+        char *cl_str = strcasestr(hbuf, "Content-Length:");
+        if (cl_str) {
+            size_t val = 0;
+            if (sscanf(cl_str + 15, "%zu", &val) == 1 && val > 0) {
+                if (val > expected_len) {
+                    close_after_read = 1;
+                } else {
+                    expected_len = val;
+                }
+            }
+        } else {
+            close_after_read = 1;
         }
 
-        fprintf(stderr, "[HTTP_RANGE] %s Range=bytes=%" PRIu64 "-%" PRIu64 " (%zu B) -> HTTP %d (got %zu B)\n",
-                vf->http_path, start, end, len, status_code, read_bytes);
-
-        if (read_bytes == len) {
-            return (ssize_t)read_bytes;
+        if (status_code == 200) {
+            close_after_read = 1;
         }
 
-        fprintf(stderr, "[HTTP_RANGE_ERR] short read %zu < %zu\n", read_bytes, len);
-        close(vf->http_sock);
-        vf->http_sock = -1;
+        size_t leftover_body = hlen - (size_t)(body_start - hbuf);
+        if (leftover_body > expected_len) leftover_body = expected_len;
+        if (leftover_body > 0) {
+            memcpy(dst, body_start, leftover_body);
+        }
+        size_t total_body = leftover_body;
+
+        while (total_body < expected_len) {
+            if (now_ms() >= deadline_ms) {
+                vod_close_sock(sock_ptr);
+                return -1;
+            }
+            if (abort_flag && *abort_flag) {
+                vod_close_sock(sock_ptr);
+                return -1;
+            }
+            ssize_t rd = recv(*sock_ptr, dst + total_body, expected_len - total_body, 0);
+            if (rd <= 0) break;
+            total_body += (size_t)rd;
+        }
+
+        if (total_body < expected_len) {
+            vod_close_sock(sock_ptr);
+            if (abort_flag && *abort_flag) return -1;
+            continue;
+        }
+
+        *out_len = total_body;
+        if (close_after_read) {
+            vod_close_sock(sock_ptr);
+        }
+        return 0;
     }
+
+    vod_close_sock(sock_ptr);
     return -1;
 }
 
-static void serve_vod_backend(struct virtual_file *vf, uint8_t *dst, uint64_t foff, size_t c, uint64_t deadline_ms) {
-    if (foff >= vf->file_size) {
-        memset(dst, 0, c);
-        return;
+static int vod_init_head_cache_file(int fi) {
+    if (fi < 0 || fi >= g_num_files) return -1;
+    struct virtual_file *f = &g_files[fi];
+    if (f->head_fetched) return 0;
+    if (f->file_size == 0 || f->http_path[0] == '\0') return 0;
+    if (now_ms() < f->head_failed_until) return -1;
+
+    size_t max_head = VOD_HEAD_SZ;
+    size_t to_fetch = (f->file_size < max_head) ? (size_t)f->file_size : (size_t)max_head;
+    if (!f->head_cache) {
+        f->head_cache = (uint8_t *)malloc(max_head);
+        if (!f->head_cache) {
+            fprintf(stderr, "[!] Memory allocation failure for VOD head_cache file %d\n", fi);
+            return -1;
+        }
     }
 
-    /* PROCESSING state: Frontier pacing */
-    if (vf->state == VOD_STATE_PROCESSING) {
-        pthread_mutex_lock(&vf->vf_mu);
-        while (foff >= vf->bytes_available && now_ms() < deadline_ms && g_running) {
+    fprintf(stderr, "[*] Preenchendo VOD Head Pinning Cache [file %d: %s]: 0 a %zu (%.2f MB)...\n",
+           fi, f->path, to_fetch, (double)to_fetch / (1024.0 * 1024.0));
+    size_t fetched = 0;
+    volatile int abort_flag = 0;
+    int res = vod_http_fetch_chunk(&vod_fg_sock, f->http_host, f->http_port, f->http_path,
+                                  f->file_size, f->head_cache, 0, to_fetch, &fetched, &abort_flag, now_ms() + 10000);
+    if (res == 0 && fetched > 0) {
+        f->head_len = fetched;
+        f->head_fetched = 1;
+        f->head_failed_until = 0;
+        fprintf(stderr, "[✓] VOD Head Pinning Cache pronto [file %d]: %zu bytes em RAM (0 ms latency, 0 rede)\n",
+               fi, f->head_len);
+        return 0;
+    }
+    f->head_failed_until = now_ms() + 15000;
+    fprintf(stderr, "[!] Falha ao preencher VOD Head Pinning Cache [file %d] (tentara novamente em 15s)\n", fi);
+    return -1;
+}
+
+static void *vod_prefetch_worker(void *arg) {
+    (void)arg;
+    while (g_running) {
+        uint64_t target = (uint64_t)-1;
+        int target_fi = -1;
+
+        pthread_mutex_lock(&vod_mu);
+        while (g_running && !vod_prefetch_requested) {
             struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_nsec += 50000000; /* 50 ms step */
-            if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
-            pthread_cond_timedwait(&vf->vf_cv, &vf->vf_mu, &ts);
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            ts.tv_sec += 1;
+            pthread_cond_timedwait(&vod_prefetch_cv, &vod_mu, &ts);
         }
-        if (foff >= vf->bytes_available) {
-            /* Frontier still not reached; fill zero without returning false EOF */
-            memset(dst, 0, c);
-            pthread_mutex_unlock(&vf->vf_mu);
-            return;
+        if (!g_running) {
+            pthread_mutex_unlock(&vod_mu);
+            break;
         }
-        pthread_mutex_unlock(&vf->vf_mu);
+
+        target = vod_prefetch_target;
+        target_fi = vod_prefetch_target_fi;
+        vod_prefetch_requested = 0;
+        vod_prefetch_ready = 0;
+        vod_prefetch_fi = -1;
+        vod_prefetch_start = (uint64_t)-1;
+        vod_prefetch_len = 0;
+        vod_prefetch_in_progress = 1;
+        vod_prefetch_abort = 0;
+        pthread_mutex_unlock(&vod_mu);
+
+        size_t fetched = 0;
+        int res = -1;
+        if (target_fi >= 0 && target_fi < g_num_files) {
+            struct virtual_file *vf = &g_files[target_fi];
+            res = vod_http_fetch_chunk(&vod_bg_sock, vf->http_host, vf->http_port, vf->http_path,
+                                      vf->file_size, vod_prefetch_buf, target, VOD_CHUNK_SZ,
+                                      &fetched, &vod_prefetch_abort, now_ms() + 15000);
+        }
+
+        pthread_mutex_lock(&vod_mu);
+        vod_prefetch_in_progress = 0;
+        if (res == 0 && !vod_prefetch_abort && fetched > 0) {
+            vod_prefetch_fi = target_fi;
+            vod_prefetch_start = target;
+            vod_prefetch_len = fetched;
+            vod_prefetch_ready = 1;
+        } else {
+            vod_prefetch_ready = 0;
+            vod_prefetch_fi = -1;
+        }
+        pthread_cond_broadcast(&vod_done_cv);
+        pthread_mutex_unlock(&vod_mu);
+    }
+    vod_bg_sock_close();
+    return NULL;
+}
+
+static ssize_t serve_vod_slice_file(int fi, uint8_t *dst, uint64_t foff, size_t to_read, uint64_t deadline_ms) {
+    if (fi < 0 || fi >= g_num_files) return 0;
+    struct virtual_file *f = &g_files[fi];
+    if (f->file_size == 0 || to_read == 0 || foff >= f->file_size) return 0;
+    if (now_ms() >= deadline_ms) return -ETIMEDOUT;
+    if (foff + (uint64_t)to_read > f->file_size) to_read = (size_t)(f->file_size - foff);
+
+    if (!f->head_fetched) {
+        vod_init_head_cache_file(fi);
+    }
+
+    /* 1. Head Pinning Cache */
+    if (foff < f->head_len && f->head_cache) {
+        size_t avail = f->head_len - (size_t)foff;
+        size_t take = (to_read < avail) ? to_read : avail;
+        memcpy(dst, f->head_cache + foff, take);
+
+        if (foff >= f->head_len * 3 / 4 && f->head_len < f->file_size) {
+            pthread_mutex_lock(&vod_mu);
+            uint64_t bridge_target = f->head_len;
+            if (!vod_prefetch_in_progress &&
+                !(vod_prefetch_ready && vod_prefetch_fi == fi && vod_prefetch_start == bridge_target) &&
+                !(vod_media_fi == fi && vod_media_start == bridge_target && vod_media_len > 0)) {
+                vod_prefetch_target_fi = fi;
+                vod_prefetch_target = bridge_target;
+                vod_prefetch_requested = 1;
+                pthread_cond_signal(&vod_prefetch_cv);
+            }
+            pthread_mutex_unlock(&vod_mu);
+        }
+
+        return (ssize_t)take;
+    }
+
+    /* 2. Dedicated VOD Media Sliding Cache & Prefetch for foff >= head_len */
+    pthread_mutex_lock(&vod_mu);
+
+    /* Case A: HIT in vod_media_cache */
+    if (vod_media_fi == fi && foff >= vod_media_start && foff < vod_media_start + vod_media_len) {
+        size_t avail = vod_media_len - (size_t)(foff - vod_media_start);
+        size_t take = (to_read < avail) ? to_read : avail;
+        memcpy(dst, vod_media_cache + (foff - vod_media_start), take);
+
+        if (foff >= vod_media_start + vod_media_len / 2) {
+            uint64_t next_start = vod_media_start + vod_media_len;
+            if (next_start < f->file_size) {
+                if (!(vod_prefetch_ready && vod_prefetch_fi == fi && vod_prefetch_start == next_start) &&
+                    !(vod_prefetch_in_progress && vod_prefetch_target_fi == fi && vod_prefetch_target == next_start)) {
+                    vod_prefetch_target_fi = fi;
+                    vod_prefetch_target = next_start;
+                    vod_prefetch_requested = 1;
+                    pthread_cond_signal(&vod_prefetch_cv);
+                }
+            }
+        }
+        pthread_mutex_unlock(&vod_mu);
+        return (ssize_t)take;
+    }
+
+    /* Case B: HIT in vod_prefetch_buf */
+    if (vod_prefetch_ready && vod_prefetch_fi == fi && foff >= vod_prefetch_start && foff < vod_prefetch_start + vod_prefetch_len) {
+        uint8_t *tmp = vod_media_cache;
+        vod_media_cache = vod_prefetch_buf;
+        vod_prefetch_buf = tmp;
+
+        vod_media_fi = fi;
+        vod_media_start = vod_prefetch_start;
+        vod_media_len = vod_prefetch_len;
+
+        vod_prefetch_ready = 0;
+        vod_prefetch_fi = -1;
+        vod_prefetch_start = (uint64_t)-1;
+        vod_prefetch_len = 0;
+
+        size_t avail = vod_media_len - (size_t)(foff - vod_media_start);
+        size_t take = (to_read < avail) ? to_read : avail;
+        memcpy(dst, vod_media_cache + (foff - vod_media_start), take);
+
+        if (foff >= vod_media_start + vod_media_len / 2) {
+            uint64_t next_start = vod_media_start + vod_media_len;
+            if (next_start < f->file_size &&
+                !(vod_prefetch_in_progress && vod_prefetch_target_fi == fi && vod_prefetch_target == next_start)) {
+                vod_prefetch_target_fi = fi;
+                vod_prefetch_target = next_start;
+                vod_prefetch_requested = 1;
+                pthread_cond_signal(&vod_prefetch_cv);
+            }
+        }
+        pthread_mutex_unlock(&vod_mu);
+        return (ssize_t)take;
+    }
+
+    /* Case C: Currently downloading in background */
+    if (vod_prefetch_in_progress && vod_prefetch_target_fi == fi &&
+        foff >= vod_prefetch_target && foff < vod_prefetch_target + VOD_CHUNK_SZ) {
+        while (vod_prefetch_in_progress && !vod_prefetch_abort && g_running) {
+            uint64_t current_time = now_ms();
+            if (current_time >= deadline_ms) break;
+
+            uint64_t wait_ms = deadline_ms - current_time;
+            if (wait_ms > 5000) wait_ms = 5000;
+
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            ts.tv_sec += (time_t)(wait_ms / 1000);
+            ts.tv_nsec += (long)((wait_ms % 1000) * 1000000);
+            if (ts.tv_nsec >= 1000000000L) {
+                ts.tv_sec += 1;
+                ts.tv_nsec -= 1000000000L;
+            }
+
+            int rc = pthread_cond_timedwait(&vod_done_cv, &vod_mu, &ts);
+            if (rc == ETIMEDOUT && now_ms() >= deadline_ms) {
+                break;
+            }
+        }
+        if (vod_prefetch_ready && vod_prefetch_fi == fi &&
+            foff >= vod_prefetch_start && foff < vod_prefetch_start + vod_prefetch_len) {
+            uint8_t *tmp = vod_media_cache;
+            vod_media_cache = vod_prefetch_buf;
+            vod_prefetch_buf = tmp;
+
+            vod_media_fi = fi;
+            vod_media_start = vod_prefetch_start;
+            vod_media_len = vod_prefetch_len;
+
+            vod_prefetch_ready = 0;
+            vod_prefetch_fi = -1;
+            vod_prefetch_start = (uint64_t)-1;
+            vod_prefetch_len = 0;
+
+            size_t avail = vod_media_len - (size_t)(foff - vod_media_start);
+            size_t take = (to_read < avail) ? to_read : avail;
+            memcpy(dst, vod_media_cache + (foff - vod_media_start), take);
+
+            if (foff >= vod_media_start + vod_media_len / 2) {
+                uint64_t next_start = vod_media_start + vod_media_len;
+                if (next_start < f->file_size &&
+                    !(vod_prefetch_in_progress && vod_prefetch_target_fi == fi && vod_prefetch_target == next_start)) {
+                    vod_prefetch_target_fi = fi;
+                    vod_prefetch_target = next_start;
+                    vod_prefetch_requested = 1;
+                    pthread_cond_signal(&vod_prefetch_cv);
+                }
+            }
+            pthread_mutex_unlock(&vod_mu);
+            return (ssize_t)take;
+        }
+    }
+
+    /* Case D: Cache Miss / Seek outside both buffers */
+    if (now_ms() >= deadline_ms) {
+        pthread_mutex_unlock(&vod_mu);
+        return -ETIMEDOUT;
+    }
+
+    if (vod_prefetch_in_progress) {
+        vod_prefetch_abort = 1;
+        vod_bg_sock_shutdown();
+        while (vod_prefetch_in_progress && g_running) {
+            uint64_t current_time = now_ms();
+            if (current_time >= deadline_ms) break;
+            uint64_t wait_ms = deadline_ms - current_time;
+            if (wait_ms > 1000) wait_ms = 1000;
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            ts.tv_sec += (time_t)(wait_ms / 1000);
+            ts.tv_nsec += (long)((wait_ms % 1000) * 1000000);
+            if (ts.tv_nsec >= 1000000000L) {
+                ts.tv_sec += 1;
+                ts.tv_nsec -= 1000000000L;
+            }
+            pthread_cond_timedwait(&vod_done_cv, &vod_mu, &ts);
+        }
+        vod_prefetch_abort = 0;
+    }
+    vod_prefetch_requested = 0;
+    vod_prefetch_target = (uint64_t)-1;
+    vod_prefetch_target_fi = -1;
+    vod_prefetch_ready = 0;
+    vod_prefetch_fi = -1;
+    vod_prefetch_start = (uint64_t)-1;
+    vod_prefetch_len = 0;
+
+    if (now_ms() >= deadline_ms) {
+        pthread_mutex_unlock(&vod_mu);
+        return -ETIMEDOUT;
+    }
+
+    vod_media_fi = -1;
+    vod_media_start = (uint64_t)-1;
+    vod_media_len = 0;
+
+    pthread_mutex_unlock(&vod_mu);
+
+    size_t fetched = 0;
+    volatile int dummy_abort = 0;
+    int res = vod_http_fetch_chunk(&vod_fg_sock, f->http_host, f->http_port, f->http_path,
+                                  f->file_size, vod_media_cache, foff, VOD_CHUNK_SZ,
+                                  &fetched, &dummy_abort, deadline_ms);
+
+    pthread_mutex_lock(&vod_mu);
+
+    if (res == 0 && fetched > 0) {
+        vod_media_fi = fi;
+        vod_media_start = foff;
+        vod_media_len = fetched;
+
+        size_t avail = vod_media_len;
+        size_t take = (to_read < avail) ? to_read : avail;
+        memcpy(dst, vod_media_cache, take);
+
+        if (foff >= vod_media_start + vod_media_len / 2) {
+            uint64_t next_start = vod_media_start + vod_media_len;
+            if (next_start < f->file_size) {
+                vod_prefetch_target_fi = fi;
+                vod_prefetch_target = next_start;
+                vod_prefetch_requested = 1;
+                pthread_cond_signal(&vod_prefetch_cv);
+            }
+        }
+        pthread_mutex_unlock(&vod_mu);
+        return (ssize_t)take;
+    }
+
+    pthread_mutex_unlock(&vod_mu);
+    return -EIO;
+}
+
+static int serve_vod_backend(int fi, uint8_t *dst, uint64_t foff, size_t c, uint64_t deadline_ms) {
+    if (fi < 0 || fi >= g_num_files) {
+        memset(dst, 0, c);
+        return 0;
+    }
+    struct virtual_file *vf = &g_files[fi];
+    if (foff >= vf->file_size) {
+        memset(dst, 0, c);
+        return 0;
     }
 
     if (vf->src_type == SRC_TEST_PATTERN) {
         for (size_t i = 0; i < c; i++) {
             dst[i] = (uint8_t)((foff + (uint64_t)i) & 0xFFULL);
         }
-        return;
+        return 0;
     }
 
-    /* READY state or within PROCESSING frontier: HTTP Range fetch */
-    if (vf->src_type == SRC_VOD_HTTP_RANGE) {
-        pthread_mutex_lock(&vf->vf_mu);
-        ssize_t rd = http_fetch_range(vf, foff, c, dst);
-        pthread_mutex_unlock(&vf->vf_mu);
-        if (rd < 0) {
-            memset(dst, 0, c);
+    pthread_mutex_lock(&vf->vf_mu);
+    enum vod_state st = vf->state;
+    uint64_t avail = vf->bytes_available;
+    pthread_mutex_unlock(&vf->vf_mu);
+
+    size_t ok = c;
+    if (st == VOD_STATE_PROCESSING) {
+        if (foff >= avail) {
+            pthread_mutex_lock(&vf->vf_mu);
+            while (foff >= vf->bytes_available && now_ms() < deadline_ms && g_running) {
+                struct timespec ts;
+                clock_gettime(CLOCK_MONOTONIC, &ts);
+                ts.tv_nsec += 50000000; /* 50ms step */
+                if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+                pthread_cond_timedwait(&vf->vf_cv, &vf->vf_mu, &ts);
+            }
+            avail = vf->bytes_available;
+            pthread_mutex_unlock(&vf->vf_mu);
+            if (foff >= avail) {
+                memset(dst, 0, c);
+                return 0;
+            }
         }
-    } else {
-        memset(dst, 0, c);
+        if (foff + (uint64_t)c > avail) {
+            ok = (size_t)(avail - foff);
+        }
+    }
+
+    if (vf->src_type == SRC_VOD_HTTP_RANGE) {
+        size_t done = 0;
+        while (done < ok) {
+            ssize_t rd = serve_vod_slice_file(fi, dst + done, foff + done, ok - done, deadline_ms);
+            if (rd <= 0) {
+                memset(dst + done, 0, c - done);
+                return -EIO;
+            }
+            done += (size_t)rd;
+        }
+        if (c > ok) {
+            memset(dst + ok, 0, c - ok);
+        }
+        return 0;
+    }
+
+    memset(dst, 0, c);
+    return 0;
+}
+
+static inline void patch_serial_in_buffer(uint8_t *buf, uint64_t cur_disk, size_t len, uint64_t target_disk_off) {
+    if (cur_disk < target_disk_off + 8 && cur_disk + (uint64_t)len > target_disk_off) {
+        uint64_t start_overlap = (cur_disk > target_disk_off) ? cur_disk : target_disk_off;
+        uint64_t end_overlap = (cur_disk + (uint64_t)len < target_disk_off + 8) ? cur_disk + (uint64_t)len : target_disk_off + 8;
+        size_t buf_offset = (size_t)(start_overlap - cur_disk);
+        size_t serial_offset = (size_t)(start_overlap - target_disk_off);
+        size_t copy_bytes = (size_t)(end_overlap - start_overlap);
+        memcpy(buf + buf_offset, g_current_volume_serial + serial_offset, copy_bytes);
     }
 }
 
 /* =========================================================================
  *  MASTER MULTI-FILE DISK SERVING FUNCTION
  * ========================================================================= */
-void ntfs_serve_disk(uint8_t *dst, uint64_t disk_offset, size_t n, uint64_t deadline_ms) {
+int ntfs_serve_disk(uint8_t *dst, uint64_t disk_offset, size_t n, uint64_t deadline_ms) {
     size_t done = 0;
+    int ret_status = 0;
+
     while (done < n) {
         uint64_t cur_disk = disk_offset + (uint64_t)done;
         uint64_t sec = cur_disk / BPS;
@@ -901,7 +1542,7 @@ void ntfs_serve_disk(uint8_t *dst, uint64_t disk_offset, size_t n, uint64_t dead
                 type_str = "PROBE";
             } else if (foff == vf->tel_last_foff + vf->tel_last_sz) {
                 type_str = "SEQ";
-            } else if (foff + c >= vf->file_size - 131072 || (foff < 131072 && vf->tel_max_foff > 1048576)) {
+            } else if ((vf->file_size > 131072 && foff + c >= vf->file_size - 131072) || (foff < 131072 && vf->tel_max_foff > 1048576)) {
                 type_str = "PROBE";
             } else {
                 type_str = "SEEK";
@@ -920,24 +1561,27 @@ void ntfs_serve_disk(uint8_t *dst, uint64_t disk_offset, size_t n, uint64_t dead
                 pthread_mutex_lock(&g_mu);
 
                 if (g_is_favorites_mode && file_idx != g_active_channel_idx) {
-                    uint64_t now_sw = now_ms();
-                    if (now_sw - g_last_channel_switch_ms > 800) {
-                        g_last_channel_switch_ms = now_sw;
-                        int prev_idx = g_active_channel_idx;
-                        g_active_channel_idx = file_idx;
-                        fprintf(stderr, "[FUSE_CHANNELS] TV selected channel switch: File %d (%s) -> File %d (%s, ID: %s)\n",
-                                prev_idx, g_files[prev_idx].path, file_idx, vf->path, vf->id);
+                    /* Channel switch debounce: require sustained reads (>= 3 blocks AND >= 256KB) */
+                    if (vf->tel_count >= 3 && vf->tel_max_foff >= 262144) {
+                        uint64_t now_sw = now_ms();
+                        if (now_sw - g_last_channel_switch_ms > 2000) {
+                            g_last_channel_switch_ms = now_sw;
+                            int prev_idx = g_active_channel_idx;
+                            g_active_channel_idx = file_idx;
+                            fprintf(stderr, "[FUSE_CHANNELS] TV selected channel switch: File %d (%s) -> File %d (%s, ID: %s)\n",
+                                    prev_idx, g_files[prev_idx].path, file_idx, vf->path, vf->id);
 
-                        trigger_vps_channel_switch(vf->id);
+                            trigger_vps_channel_switch(vf->id);
 
-                        /* Invalidate old anchor to force re-anchor to new channel's PAT/SPS */
-                        g_base_valid = 0;
-                        g_anchor_foff = (uint64_t)-1;
-                        g_anchor_stream_pos = 0;
-                        g_prev_Fend = (uint64_t)-1;
-                        g_anchor_birth_ms = now_sw;
-                        reset_probe_state();
-                        pthread_cond_broadcast(&g_cv);
+                            /* Invalidate old anchor to force re-anchor to new channel's PAT/SPS */
+                            g_base_valid = 0;
+                            g_anchor_foff = (uint64_t)-1;
+                            g_anchor_stream_pos = 0;
+                            g_prev_Fend = (uint64_t)-1;
+                            g_anchor_birth_ms = now_sw;
+                            reset_probe_state();
+                            pthread_cond_broadcast(&g_cv);
+                        }
                     }
                 }
 
@@ -956,24 +1600,49 @@ void ntfs_serve_disk(uint8_t *dst, uint64_t disk_offset, size_t n, uint64_t dead
                 int64_t lead_bytes = (int64_t)g_s_write - (int64_t)reader_pos;
                 double lead_sec = (double)lead_bytes / 617600.0;
 
-                fprintf(stderr, "[LIVE_TEL] #%" PRIu64 " t=%" PRIu64 ".%03" PRIu64 "ms LBA=%" PRIu64 " foff=%" PRIu64 " sz=%zu dt=%" PRIu64 "ms rate=%.2fMB/s lead_bytes=%" PRId64 " lead_sec=%.2fs epoch=%" PRIu64 " base=%" PRIu64 " S_write=%" PRIu64 " max_foff=%" PRIu64 " near_starve=%" PRIu64 " nulls=%" PRIu64 " type=%s file=%s\n",
-                        vf->tel_count, t_sec, t_ms, sec, foff, c, dt, rate, lead_bytes, lead_sec,
-                        g_epoch, g_anchor_stream_pos, g_s_write, vf->tel_max_foff, g_live_starve_near_count, g_live_fill_null_count, type_str, vf->path);
+                static uint64_t last_live_tel_ms = 0;
+                if (t_now - last_live_tel_ms >= 1000 || g_live_starve_near_count > 0 || g_live_fill_null_count > 0) {
+                    last_live_tel_ms = t_now;
+                    fprintf(stderr, "[LIVE_TEL] #%" PRIu64 " t=%" PRIu64 ".%03" PRIu64 "ms LBA=%" PRIu64 " foff=%" PRIu64 " sz=%zu dt=%" PRIu64 "ms rate=%.2fMB/s lead_bytes=%" PRId64 " lead_sec=%.2fs epoch=%" PRIu64 " base=%" PRIu64 " S_write=%" PRIu64 " max_foff=%" PRIu64 " near_starve=%" PRIu64 " nulls=%" PRIu64 " type=%s file=%s\n",
+                            vf->tel_count, t_sec, t_ms, sec, foff, c, dt, rate, lead_bytes, lead_sec,
+                            g_epoch, g_anchor_stream_pos, g_s_write, vf->tel_max_foff, g_live_starve_near_count, g_live_fill_null_count, type_str, vf->path);
+                }
 
                 pthread_mutex_unlock(&g_mu);
             } else {
-                fprintf(stderr, "[VOD_TEL] #%" PRIu64 " t=%" PRIu64 ".%03" PRIu64 "ms LBA=%" PRIu64 " foff=%" PRIu64 " sz=%zu dt=%" PRIu64 "ms rate=%.2fMB/s max_foff=%" PRIu64 " type=%s file=%s\n",
-                        vf->tel_count, t_sec, t_ms, sec, foff, c, dt, rate, vf->tel_max_foff, type_str, vf->path);
+                static uint64_t last_vod_tel_ms = 0;
+                if (t_now - last_vod_tel_ms >= 1000) {
+                    last_vod_tel_ms = t_now;
+                    fprintf(stderr, "[VOD_TEL] #%" PRIu64 " t=%" PRIu64 ".%03" PRIu64 "ms LBA=%" PRIu64 " foff=%" PRIu64 " sz=%zu dt=%" PRIu64 "ms rate=%.2fMB/s max_foff=%" PRIu64 " type=%s file=%s\n",
+                            vf->tel_count, t_sec, t_ms, sec, foff, c, dt, rate, vf->tel_max_foff, type_str, vf->path);
+                }
 
                 pthread_rwlock_unlock(&g_catalog_rwlock);
-                serve_vod_backend(vf, dst + done, foff, c, deadline_ms);
+                int vres = serve_vod_backend(file_idx, dst + done, foff, c, deadline_ms);
+                if (vres < 0) {
+                    ret_status = vres;
+                }
             }
             done += c;
         } else {
             pthread_rwlock_unlock(&g_catalog_rwlock);
             /* Sector is NTFS filesystem metadata or unallocated sector */
-            size_t c = (size_t)BPS - sec_off;
-            if (c > n - done) c = n - done;
+            size_t c = n - done;
+            /* Clamp c to the next virtual file extent start to avoid over-reading metadata into a file extent */
+            uint64_t next_ext_disk = (uint64_t)-1;
+            for (int fi = 0; fi < g_num_files; fi++) {
+                const struct virtual_file *fv = &g_files[fi];
+                if (!fv->active) continue;
+                for (int ei = 0; ei < fv->num_extents; ei++) {
+                    uint64_t ext_start_disk = fv->extents[ei].lba_start * BPS;
+                    if (ext_start_disk > cur_disk && ext_start_disk < next_ext_disk) {
+                        next_ext_disk = ext_start_disk;
+                    }
+                }
+            }
+            if (next_ext_disk != (uint64_t)-1 && cur_disk + (uint64_t)c > next_ext_disk) {
+                c = (size_t)(next_ext_disk - cur_disk);
+            }
 
             if (g_meta_fd >= 0) {
                 ssize_t rd = pread(g_meta_fd, dst + done, c, (off_t)cur_disk);
@@ -990,27 +1659,15 @@ void ntfs_serve_disk(uint8_t *dst, uint64_t disk_offset, size_t n, uint64_t dead
 
             /* Intercept and dynamically patch Volume Serial Number in memory */
             if (g_serial_initialized) {
-                /* Primary VBR at sector 0, offset 0x48 */
-                if (cur_disk <= 0x48 && cur_disk + (uint64_t)c > 0x48) {
-                    size_t rel = (size_t)(0x48 - cur_disk);
-                    size_t copy_len = c - rel;
-                    if (copy_len > 8) copy_len = 8;
-                    memcpy(dst + done + rel, g_current_volume_serial, copy_len);
-                }
-                /* Backup VBR at last sector */
+                patch_serial_in_buffer(dst + done, cur_disk, c, 0x48);
                 if (g_total_sectors > 0) {
-                    uint64_t b_off = (g_total_sectors - 1) * BPS + 0x48;
-                    if (cur_disk <= b_off && cur_disk + (uint64_t)c > b_off) {
-                        size_t rel = (size_t)(b_off - cur_disk);
-                        size_t copy_len = c - rel;
-                        if (copy_len > 8) copy_len = 8;
-                        memcpy(dst + done + rel, g_current_volume_serial, copy_len);
-                    }
+                    patch_serial_in_buffer(dst + done, cur_disk, c, (g_total_sectors - 1) * BPS + 0x48);
                 }
             }
             done += c;
         }
     }
+    return ret_status;
 }
 
 static volatile int g_flush_requested = 0;
@@ -1019,10 +1676,15 @@ static void handle_sigusr1(int s) {
     g_flush_requested = 1;
 }
 
+static uint8_t g_feeder_buf[65536];
+static uint8_t g_feeder_sync_acc[131072];
+
 /* Feeder thread for live mode */
 static void *feeder_thread(void *arg) {
     const char *fifo_path = (const char *)arg;
-    uint8_t buf[65536];
+    int need_ts_sync = 0;
+    size_t sync_acc_len = 0;
+    size_t sync_total_scanned = 0;
 
     while (g_running) {
         int fd = open(fifo_path, O_RDONLY);
@@ -1041,7 +1703,7 @@ static void *feeder_thread(void *arg) {
                 /* Drain Linux FIFO kernel buffer */
                 int flags = fcntl(fd, F_GETFL, 0);
                 fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-                while (read(fd, buf, sizeof(buf)) > 0) {}
+                while (read(fd, g_feeder_buf, sizeof(g_feeder_buf)) > 0) {}
                 fcntl(fd, F_SETFL, flags);
 
                 /* Reset internal live stream state */
@@ -1054,6 +1716,7 @@ static void *feeder_thread(void *arg) {
                 g_prev_Fend = (uint64_t)-1;
                 g_hcache_len = 0;
                 g_anchor_birth_ms = now_ms();
+                g_epoch++;
                 reset_probe_state();
                 pthread_cond_broadcast(&g_cv);
                 pthread_mutex_unlock(&g_mu);
@@ -1061,18 +1724,67 @@ static void *feeder_thread(void *arg) {
                 /* Randomize volume serial so TV sees a new filesystem */
                 randomize_volume_serial();
 
+                need_ts_sync = 1;
+                sync_acc_len = 0;
+                sync_total_scanned = 0;
                 continue;
             }
 
-
-            ssize_t n = read(fd, buf, sizeof(buf));
+            ssize_t n = read(fd, g_feeder_buf, sizeof(g_feeder_buf));
             if (n < 0 && errno == EINTR) continue;
             if (n <= 0) break;
+            size_t bytes_read = (size_t)n;
+            if (bytes_read > sizeof(g_feeder_buf)) bytes_read = sizeof(g_feeder_buf);
+
+            const uint8_t *data_to_write = g_feeder_buf;
+            size_t bytes_to_write = bytes_read;
+
+            if (need_ts_sync) {
+                if (sync_acc_len + bytes_read > sizeof(g_feeder_sync_acc)) {
+                    sync_acc_len = 0;
+                }
+                memcpy(g_feeder_sync_acc + sync_acc_len, g_feeder_buf, bytes_read);
+                sync_acc_len += bytes_read;
+                sync_total_scanned += bytes_read;
+
+                size_t lock_idx = (size_t)-1;
+                for (size_t i = 0; i + 3 * 188 <= sync_acc_len; i++) {
+                    if (g_feeder_sync_acc[i] == 0x47 && g_feeder_sync_acc[i + 188] == 0x47 && g_feeder_sync_acc[i + 376] == 0x47) {
+                        lock_idx = i;
+                        break;
+                    }
+                }
+                if (lock_idx == (size_t)-1) {
+                    if (sync_total_scanned >= 64 * 1024) {
+                        /* Fallback: force lock on first available 0x47 (ALTO 2) */
+                        for (size_t i = 0; i + 188 <= sync_acc_len; i++) {
+                            if (g_feeder_sync_acc[i] == 0x47) {
+                                lock_idx = i;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (lock_idx == (size_t)-1) {
+                    if (sync_acc_len > 3 * 188) {
+                        size_t keep = 3 * 188 - 1;
+                        memmove(g_feeder_sync_acc, g_feeder_sync_acc + sync_acc_len - keep, keep);
+                        sync_acc_len = keep;
+                    }
+                    continue;
+                }
+                data_to_write = g_feeder_sync_acc + lock_idx;
+                bytes_to_write = sync_acc_len - lock_idx;
+                need_ts_sync = 0;
+                sync_acc_len = 0;
+                sync_total_scanned = 0;
+                fprintf(stderr, "[FEEDER] TS stream re-aligned after flush (skipped %zu offset bytes)\n", lock_idx);
+            }
 
             pthread_mutex_lock(&g_mu);
             uint64_t at = g_s_write;
-            ring_write(buf, (size_t)n);
-            hcache_feed(buf, (size_t)n, at);
+            ring_write(data_to_write, bytes_to_write);
+            hcache_feed(data_to_write, bytes_to_write, at);
             static uint64_t last_feed_log = 0;
             if (g_s_write - last_feed_log >= 2 * 1024 * 1024) {
                 last_feed_log = g_s_write;
@@ -1103,8 +1815,7 @@ static void init_test_pattern(void) {
 
 static void handle_sig(int s) {
     (void)s;
-    g_running = 0;
-    pthread_cond_broadcast(&g_cv);
+    g_running = false;
 }
 
 /* =========================================================================
@@ -1123,8 +1834,8 @@ static void init_default_single_file_catalog(void) {
     vf->src_type = SRC_LIVE_FIFO;
     vf->state = VOD_STATE_READY;
     vf->bytes_available = NTFS_FILE_SIZE;
-    vf->num_extents = 3;
-    for (int i = 0; i < 3; i++) {
+    vf->num_extents = NTFS_NUM_EXTENTS;
+    for (int i = 0; i < NTFS_NUM_EXTENTS; i++) {
         vf->extents[i] = NTFS_EXTENTS[i];
     }
     vf->active = 1;
@@ -1137,187 +1848,6 @@ static void init_default_single_file_catalog(void) {
 #include "catalog_hierarchy.h"
 #include "catalog_favorites.h"
 
-#if 0
-
-
-    /* Entry 2: FILMES/Matrix.mp4 (25 MB, Inode 71) */
-    memset(&g_files[2], 0, sizeof(struct virtual_file));
-    g_files[2].file_id = 2;
-    strncpy(g_files[2].id, "vod_matrix", sizeof(g_files[2].id) - 1);
-    strncpy(g_files[2].category, "FILMES", sizeof(g_files[2].category) - 1);
-    strncpy(g_files[2].path, "FILMES/Matrix.mp4", sizeof(g_files[2].path) - 1);
-    g_files[2].file_size = 26214400ULL;
-    g_files[2].src_type = SRC_TEST_PATTERN;
-    g_files[2].state = VOD_STATE_READY;
-    g_files[2].bytes_available = 26214400ULL;
-    g_files[2].num_extents = 1;
-    g_files[2].extents[0].id = 0;
-    g_files[2].extents[0].vcn_start = 0;
-    g_files[2].extents[0].vcn_end = 6399;
-    g_files[2].extents[0].lcn_start = 147704;
-    g_files[2].extents[0].lcn_end = 154103;
-    g_files[2].extents[0].file_start = 0;
-    g_files[2].extents[0].file_end = 26214400ULL;
-    g_files[2].extents[0].lba_start = 1181632ULL;
-    g_files[2].extents[0].lba_end = 1232831ULL;
-    g_files[2].extents[0].num_clusters = 6400;
-    strncpy(g_files[2].http_host, "127.0.0.1", sizeof(g_files[2].http_host) - 1);
-    g_files[2].http_port = 8089;
-    strncpy(g_files[2].http_path, "/vod/matrix.mp4", sizeof(g_files[2].http_path) - 1);
-    g_files[2].active = 1;
-    g_files[2].http_sock = -1;
-    pthread_mutex_init(&g_files[2].vf_mu, NULL);
-    pthread_cond_init(&g_files[2].vf_cv, NULL);
-
-    /* Entry 3: FILMES/Oppenheimer.mp4 (20 MB, Inode 72, PROCESSING) */
-    memset(&g_files[3], 0, sizeof(struct virtual_file));
-    g_files[3].file_id = 3;
-    strncpy(g_files[3].id, "vod_oppenheimer", sizeof(g_files[3].id) - 1);
-    strncpy(g_files[3].category, "FILMES", sizeof(g_files[3].category) - 1);
-    strncpy(g_files[3].path, "FILMES/Oppenheimer.mp4", sizeof(g_files[3].path) - 1);
-    g_files[3].file_size = 20971520ULL;
-    g_files[3].src_type = SRC_TEST_PATTERN;
-    g_files[3].state = VOD_STATE_PROCESSING;
-    g_files[3].bytes_available = 4194304ULL; /* Starts at 4 MB */
-    g_files[3].num_extents = 1;
-    g_files[3].extents[0].id = 0;
-    g_files[3].extents[0].vcn_start = 0;
-    g_files[3].extents[0].vcn_end = 5119;
-    g_files[3].extents[0].lcn_start = 154104;
-    g_files[3].extents[0].lcn_end = 159223;
-    g_files[3].extents[0].file_start = 0;
-    g_files[3].extents[0].file_end = 20971520ULL;
-    g_files[3].extents[0].lba_start = 1232832ULL;
-    g_files[3].extents[0].lba_end = 1273791ULL;
-    g_files[3].extents[0].num_clusters = 5120;
-    strncpy(g_files[3].http_host, "127.0.0.1", sizeof(g_files[3].http_host) - 1);
-    g_files[3].http_port = 8089;
-    strncpy(g_files[3].http_path, "/vod/oppenheimer_processing.mp4", sizeof(g_files[3].http_path) - 1);
-    g_files[3].active = 1;
-    g_files[3].http_sock = -1;
-    pthread_mutex_init(&g_files[3].vf_mu, NULL);
-    pthread_cond_init(&g_files[3].vf_cv, NULL);
-
-    /* Entry 4: SERIES/Breaking_Bad/S01E01.mp4 (15 MB, Inode 73) */
-    memset(&g_files[4], 0, sizeof(struct virtual_file));
-    g_files[4].file_id = 4;
-    strncpy(g_files[4].id, "vod_bb_s01e01", sizeof(g_files[4].id) - 1);
-    strncpy(g_files[4].category, "SERIES", sizeof(g_files[4].category) - 1);
-    strncpy(g_files[4].path, "SERIES/Breaking_Bad/S01E01.mp4", sizeof(g_files[4].path) - 1);
-    g_files[4].file_size = 15728640ULL;
-    g_files[4].src_type = SRC_TEST_PATTERN;
-    g_files[4].state = VOD_STATE_READY;
-    g_files[4].bytes_available = 15728640ULL;
-    g_files[4].num_extents = 1;
-    g_files[4].extents[0].id = 0;
-    g_files[4].extents[0].vcn_start = 0;
-    g_files[4].extents[0].vcn_end = 3839;
-    g_files[4].extents[0].lcn_start = 159224;
-    g_files[4].extents[0].lcn_end = 163063;
-    g_files[4].extents[0].file_start = 0;
-    g_files[4].extents[0].file_end = 15728640ULL;
-    g_files[4].extents[0].lba_start = 1273792ULL;
-    g_files[4].extents[0].lba_end = 1304511ULL;
-    g_files[4].extents[0].num_clusters = 3840;
-    strncpy(g_files[4].http_host, "127.0.0.1", sizeof(g_files[4].http_host) - 1);
-    g_files[4].http_port = 8089;
-    strncpy(g_files[4].http_path, "/vod/breaking_bad_s01e01.mp4", sizeof(g_files[4].http_path) - 1);
-    g_files[4].active = 1;
-    g_files[4].http_sock = -1;
-    pthread_mutex_init(&g_files[4].vf_mu, NULL);
-    pthread_cond_init(&g_files[4].vf_cv, NULL);
-
-    /* Entry 5: SERIES/Breaking_Bad/S01E02.mp4 (12 MB, Inode 74) */
-    memset(&g_files[5], 0, sizeof(struct virtual_file));
-    g_files[5].file_id = 5;
-    strncpy(g_files[5].id, "vod_bb_s01e02", sizeof(g_files[5].id) - 1);
-    strncpy(g_files[5].category, "SERIES", sizeof(g_files[5].category) - 1);
-    strncpy(g_files[5].path, "SERIES/Breaking_Bad/S01E02.mp4", sizeof(g_files[5].path) - 1);
-    g_files[5].file_size = 12582912ULL;
-    g_files[5].src_type = SRC_TEST_PATTERN;
-    g_files[5].state = VOD_STATE_READY;
-    g_files[5].bytes_available = 12582912ULL;
-    g_files[5].num_extents = 1;
-    g_files[5].extents[0].id = 0;
-    g_files[5].extents[0].vcn_start = 0;
-    g_files[5].extents[0].vcn_end = 3071;
-    g_files[5].extents[0].lcn_start = 163320;
-    g_files[5].extents[0].lcn_end = 166391;
-    g_files[5].extents[0].file_start = 0;
-    g_files[5].extents[0].file_end = 12582912ULL;
-    g_files[5].extents[0].lba_start = 1306560ULL;
-    g_files[5].extents[0].lba_end = 1331135ULL;
-    g_files[5].extents[0].num_clusters = 3072;
-    strncpy(g_files[5].http_host, "127.0.0.1", sizeof(g_files[5].http_host) - 1);
-    g_files[5].http_port = 8089;
-    strncpy(g_files[5].http_path, "/vod/breaking_bad_s01e02.mp4", sizeof(g_files[5].http_path) - 1);
-    g_files[5].active = 1;
-    g_files[5].http_sock = -1;
-    pthread_mutex_init(&g_files[5].vf_mu, NULL);
-    pthread_cond_init(&g_files[5].vf_cv, NULL);
-
-    /* Entry 6: ANIMES/Death_Note/S01E01.mp4 (8 MB, Inode 75) */
-    memset(&g_files[6], 0, sizeof(struct virtual_file));
-    g_files[6].file_id = 6;
-    strncpy(g_files[6].id, "vod_dn_s01e01", sizeof(g_files[6].id) - 1);
-    strncpy(g_files[6].category, "ANIMES", sizeof(g_files[6].category) - 1);
-    strncpy(g_files[6].path, "ANIMES/Death_Note/S01E01.mp4", sizeof(g_files[6].path) - 1);
-    g_files[6].file_size = 8388608ULL;
-    g_files[6].src_type = SRC_TEST_PATTERN;
-    g_files[6].state = VOD_STATE_READY;
-    g_files[6].bytes_available = 8388608ULL;
-    g_files[6].num_extents = 1;
-    g_files[6].extents[0].id = 0;
-    g_files[6].extents[0].vcn_start = 0;
-    g_files[6].extents[0].vcn_end = 2047;
-    g_files[6].extents[0].lcn_start = 167416;
-    g_files[6].extents[0].lcn_end = 169463;
-    g_files[6].extents[0].file_start = 0;
-    g_files[6].extents[0].file_end = 8388608ULL;
-    g_files[6].extents[0].lba_start = 1339328ULL;
-    g_files[6].extents[0].lba_end = 1355711ULL;
-    g_files[6].extents[0].num_clusters = 2048;
-    strncpy(g_files[6].http_host, "127.0.0.1", sizeof(g_files[6].http_host) - 1);
-    g_files[6].http_port = 8089;
-    strncpy(g_files[6].http_path, "/vod/death_note_s01e01.mp4", sizeof(g_files[6].http_path) - 1);
-    g_files[6].active = 1;
-    g_files[6].http_sock = -1;
-    pthread_mutex_init(&g_files[6].vf_mu, NULL);
-    pthread_cond_init(&g_files[6].vf_cv, NULL);
-
-    /* Entry 7: ANIMES/Death_Note/S01E02.mp4 (7 MB, Inode 76) */
-    memset(&g_files[7], 0, sizeof(struct virtual_file));
-    g_files[7].file_id = 7;
-    strncpy(g_files[7].id, "vod_dn_s01e02", sizeof(g_files[7].id) - 1);
-    strncpy(g_files[7].category, "ANIMES", sizeof(g_files[7].category) - 1);
-    strncpy(g_files[7].path, "ANIMES/Death_Note/S01E02.mp4", sizeof(g_files[7].path) - 1);
-    g_files[7].file_size = 7340032ULL;
-    g_files[7].src_type = SRC_TEST_PATTERN;
-    g_files[7].state = VOD_STATE_READY;
-    g_files[7].bytes_available = 7340032ULL;
-    g_files[7].num_extents = 1;
-    g_files[7].extents[0].id = 0;
-    g_files[7].extents[0].vcn_start = 0;
-    g_files[7].extents[0].vcn_end = 1791;
-    g_files[7].extents[0].lcn_start = 171512;
-    g_files[7].extents[0].lcn_end = 173303;
-    g_files[7].extents[0].file_start = 0;
-    g_files[7].extents[0].file_end = 7340032ULL;
-    g_files[7].extents[0].lba_start = 1372096ULL;
-    g_files[7].extents[0].lba_end = 1386431ULL;
-    g_files[7].extents[0].num_clusters = 1792;
-    strncpy(g_files[7].http_host, "127.0.0.1", sizeof(g_files[7].http_host) - 1);
-    g_files[7].http_port = 8089;
-    strncpy(g_files[7].http_path, "/vod/death_note_s01e02.mp4", sizeof(g_files[7].http_path) - 1);
-    g_files[7].active = 1;
-    g_files[7].http_sock = -1;
-    pthread_mutex_init(&g_files[7].vf_mu, NULL);
-    pthread_cond_init(&g_files[7].vf_cv, NULL);
-
-    pthread_rwlock_unlock(&g_catalog_rwlock);
-}
-#endif
-
 static void detect_vbr_geometry(int meta_fd) {
     if (meta_fd < 0) return;
     uint8_t vbr[512];
@@ -1326,8 +1856,10 @@ static void detect_vbr_geometry(int meta_fd) {
             uint64_t tot_sec = 0;
             memcpy(&tot_sec, vbr + 0x28, 8);
             if (tot_sec > 0) {
-                g_total_sectors = tot_sec;
-                g_disk_size = tot_sec * BPS;
+                /* In NTFS BPB, 0x28 is volume sectors EXCLUDING the backup boot sector.
+                 * Total disk sectors = tot_sec + 1; backup VBR is at LBA tot_sec (g_total_sectors - 1). */
+                g_total_sectors = tot_sec + 1;
+                g_disk_size = g_total_sectors * BPS;
                 fprintf(stderr, "[*] Detected NTFS VBR geometry: %" PRIu64 " sectors (%.2f GiB)\n",
                         g_total_sectors, (double)g_disk_size / (1024.0 * 1024.0 * 1024.0));
             }
@@ -1340,14 +1872,61 @@ static void detect_vbr_geometry(int meta_fd) {
     }
 }
 
+static void crash_handler(int sig, siginfo_t *info, void *ucontext) {
+    ucontext_t *uc = (ucontext_t *)ucontext;
+    uintptr_t pc = 0;
+#if defined(__arm__)
+    pc = (uintptr_t)uc->uc_mcontext.arm_pc;
+#elif defined(__aarch64__)
+    pc = (uintptr_t)uc->uc_mcontext.pc;
+#elif defined(__x86_64__)
+    pc = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+#elif defined(__i386__)
+    pc = (uintptr_t)uc->uc_mcontext.gregs[REG_EIP];
+#endif
+    fprintf(stderr, "\n[FATAL CRASH] Signal %d (%s) at address %p (PC: %p)\n",
+            sig,
+            sig == SIGSEGV ? "SIGSEGV" :
+            sig == SIGBUS ? "SIGBUS" :
+            sig == SIGFPE ? "SIGFPE" :
+            sig == SIGILL ? "SIGILL" :
+            sig == SIGABRT ? "SIGABRT" : "OTHER",
+            info ? info->si_addr : NULL,
+            (void *)pc);
+    fflush(stderr);
+    _exit(128 + sig);
+}
+
 #ifndef TEST_SUITE
 int main(int argc, char **argv) {
     setlinebuf(stdout);
     setlinebuf(stderr);
 
-    signal(SIGINT, handle_sig);
-    signal(SIGTERM, handle_sig);
-    signal(SIGUSR1, handle_sigusr1);
+    signal(SIGPIPE, SIG_IGN);
+
+    struct sigaction sa_crash;
+    memset(&sa_crash, 0, sizeof(sa_crash));
+    sigemptyset(&sa_crash.sa_mask);
+    sa_crash.sa_sigaction = crash_handler;
+    sa_crash.sa_flags = SA_SIGINFO;
+    sigaction(SIGSEGV, &sa_crash, NULL);
+    sigaction(SIGBUS, &sa_crash, NULL);
+    sigaction(SIGILL, &sa_crash, NULL);
+    sigaction(SIGFPE, &sa_crash, NULL);
+    sigaction(SIGABRT, &sa_crash, NULL);
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sig;
+    sa.sa_flags = 0; /* NO SA_RESTART so blocking read(/dev/fuse) exits on signal */
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+
+    struct sigaction sa_usr;
+    memset(&sa_usr, 0, sizeof(sa_usr));
+    sa_usr.sa_handler = handle_sigusr1;
+    sa_usr.sa_flags = 0;
+    sigaction(SIGUSR1, &sa_usr, NULL);
 
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <mountpoint> [fifo_path] [metadata_img] [--multi]\n", argv[0]);
@@ -1357,13 +1936,19 @@ int main(int argc, char **argv) {
     }
 
     const char *mnt = argv[1];
-    const char *fifo = (argc > 2) ? argv[2] : "test";
-    const char *meta = (argc > 3) ? argv[3] : NULL;
+    const char *fifo = "test";
+    const char *meta = NULL;
     int multi_mode = 0;
 
+    int pos = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--multi") == 0) {
             multi_mode = 1;
+        } else {
+            if (pos == 0) mnt = argv[i];
+            else if (pos == 1) fifo = argv[i];
+            else if (pos == 2) meta = argv[i];
+            pos++;
         }
     }
 
@@ -1397,13 +1982,38 @@ int main(int argc, char **argv) {
         init_default_single_file_catalog();
     }
 
+    /* Initialize monotonic condvars */
+    pthread_condattr_t cattr;
+    pthread_condattr_init(&cattr);
+    pthread_condattr_setclock(&cattr, CLOCK_MONOTONIC);
+    pthread_cond_init(&g_cv, &cattr);
+    pthread_cond_init(&vod_prefetch_cv, &cattr);
+    pthread_cond_init(&vod_done_cv, &cattr);
+    pthread_condattr_destroy(&cattr);
+
+    /* Initialize thread attributes with 2MB stack to prevent musl stack overflow */
+    pthread_attr_t t_attr;
+    pthread_attr_init(&t_attr);
+    pthread_attr_setstacksize(&t_attr, 2 * 1024 * 1024);
+
+    /* Start VOD prefetch background thread */
+    if (pthread_create(&vod_prefetch_tid, &t_attr, vod_prefetch_worker, NULL) == 0) {
+        vod_prefetch_thread_started = 1;
+    }
+
     if (strcmp(fifo, "test") == 0) {
         printf("[*] Running in TEST PATTERN mode\n");
         init_test_pattern();
     } else {
         pthread_t th;
-        pthread_create(&th, NULL, feeder_thread, (void *)fifo);
+        if (pthread_create(&th, &t_attr, feeder_thread, (void *)fifo) != 0) {
+            fprintf(stderr, "[!] Failed to spawn feeder thread for %s\n", fifo);
+        }
     }
+    pthread_attr_destroy(&t_attr);
+
+    /* Stale mount cleanup before mount */
+    umount2(mnt, MNT_DETACH);
 
     g_fuse_fd = open("/dev/fuse", O_RDWR);
     if (g_fuse_fd < 0) {
@@ -1424,23 +2034,40 @@ int main(int argc, char **argv) {
     printf("[+] NTFS FUSE daemon mounted at %s (Disk Size: %" PRIu64 " bytes, Files: %d)\n",
            mnt, (uint64_t)g_disk_size, g_num_files);
 
-    /* FUSE main event loop */
-    uint8_t in_buf[131072 + 4096];
-    uint8_t out_buf[131072 + 4096];
+    /* FUSE main event loop buffers (static BSS, 8-byte aligned for ARMv7) */
+    static union {
+        uint8_t raw[131072 + 4096];
+        uint64_t align;
+    } in_u __attribute__((aligned(8)));
+
+    static union {
+        uint8_t raw[131072 + 4096];
+        uint64_t align;
+    } out_u __attribute__((aligned(8)));
+
+    #define in_buf  (in_u.raw)
+    #define out_buf (out_u.raw)
 
     while (g_running) {
-        ssize_t n = read(g_fuse_fd, in_buf, sizeof(in_buf));
+        ssize_t n = read(g_fuse_fd, in_buf, sizeof(in_buf) - 1);
         if (n < (ssize_t)sizeof(struct fuse_in_header)) {
-            if (n < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+            if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == ENOENT)) continue;
             break;
         }
+        if (n >= 0 && (size_t)n < sizeof(in_buf)) in_buf[n] = '\0';
 
-        const struct fuse_in_header *inh = (const struct fuse_in_header *)(const void *)in_buf;
-        uint32_t opcode = inh->opcode;
-        uint64_t unique = inh->unique;
+        struct fuse_in_header inh;
+        memcpy(&inh, in_buf, sizeof(inh));
+        uint32_t opcode = inh.opcode;
+        uint64_t unique = inh.unique;
 
         if (opcode == FUSE_INIT) {
-            const struct fuse_init_in *ii = (const struct fuse_init_in *)(const void *)(in_buf + sizeof(*inh));
+            struct fuse_init_in ii;
+            size_t avail = (size_t)n > sizeof(inh) ? (size_t)n - sizeof(inh) : 0;
+            memset(&ii, 0, sizeof(ii));
+            if (avail > sizeof(ii)) avail = sizeof(ii);
+            if (avail > 0) memcpy(&ii, in_buf + sizeof(inh), avail);
+
             struct fuse_out_header outh;
             memset(&outh, 0, sizeof(outh));
             outh.unique = unique;
@@ -1448,14 +2075,13 @@ int main(int argc, char **argv) {
             struct fuse_init_out init_out;
             memset(&init_out, 0, sizeof(init_out));
             init_out.major = 7;
-            init_out.minor = (ii->minor < 26) ? ii->minor : 26;
+            init_out.minor = (ii.minor < 26) ? ii.minor : 26;
             init_out.max_readahead = 131072;
-            init_out.flags = ii->flags & (FUSE_ASYNC_READ | FUSE_BIG_WRITES);
+            init_out.flags = ii.flags & (FUSE_ASYNC_READ | FUSE_BIG_WRITES);
             init_out.max_write = 131072;
 
             size_t out_payload_len;
-            if (ii->minor < 23) {
-                /* FUSE_COMPAT_22_INIT_OUT_SIZE = 24 bytes for Linux <= 3.13 (Samsung SM-T110 kernel 3.4.5) */
+            if (ii.minor < 23) {
                 out_payload_len = 24;
             } else {
                 out_payload_len = sizeof(struct fuse_init_out);
@@ -1467,7 +2093,12 @@ int main(int argc, char **argv) {
             iov[0].iov_len = sizeof(outh);
             iov[1].iov_base = &init_out;
             iov[1].iov_len = out_payload_len;
-            writev(g_fuse_fd, iov, 2);
+            if (writev(g_fuse_fd, iov, 2) < 0) {}
+            continue;
+        }
+
+        /* FUSE_FORGET and FUSE_BATCH_FORGET must NEVER receive a reply */
+        if (opcode == FUSE_FORGET || opcode == 42 /* FUSE_BATCH_FORGET */) {
             continue;
         }
 
@@ -1480,10 +2111,10 @@ int main(int argc, char **argv) {
             struct fuse_attr_out att;
             memset(&att, 0, sizeof(att));
             att.attr_valid = 10;
-            att.attr.ino = inh->nodeid;
-            att.attr.size = (inh->nodeid == 1) ? 4096ULL : (uint64_t)g_disk_size;
-            att.attr.blocks = (inh->nodeid == 1) ? 8ULL : (uint64_t)g_total_sectors;
-            att.attr.mode = (inh->nodeid == 1) ? (S_IFDIR | 0755U) : (S_IFREG | 0644U);
+            att.attr.ino = inh.nodeid;
+            att.attr.size = (inh.nodeid == 1) ? 4096ULL : (uint64_t)g_disk_size;
+            att.attr.blocks = (inh.nodeid == 1) ? 8ULL : (uint64_t)g_total_sectors;
+            att.attr.mode = (inh.nodeid == 1) ? (S_IFDIR | 0755U) : (S_IFREG | 0644U);
             att.attr.nlink = 1;
 
             struct iovec iov[2];
@@ -1491,12 +2122,12 @@ int main(int argc, char **argv) {
             iov[0].iov_len = sizeof(outh);
             iov[1].iov_base = &att;
             iov[1].iov_len = sizeof(att);
-            writev(g_fuse_fd, iov, 2);
+            if (writev(g_fuse_fd, iov, 2) < 0) {}
             continue;
         }
 
         if (opcode == FUSE_LOOKUP) {
-            const char *name = (const char *)(in_buf + sizeof(*inh));
+            const char *name = (const char *)(in_buf + sizeof(inh));
             if (strcmp(name, FILE_NAME) == 0) {
                 struct fuse_out_header outh;
                 memset(&outh, 0, sizeof(outh));
@@ -1520,9 +2151,17 @@ int main(int argc, char **argv) {
                 iov[0].iov_len = sizeof(outh);
                 iov[1].iov_base = &entry;
                 iov[1].iov_len = sizeof(entry);
-                writev(g_fuse_fd, iov, 2);
+                if (writev(g_fuse_fd, iov, 2) < 0) {}
                 continue;
             }
+            /* Unknown filename: return -ENOENT */
+            struct fuse_out_header outh;
+            memset(&outh, 0, sizeof(outh));
+            outh.unique = unique;
+            outh.error = -ENOENT;
+            outh.len = (uint32_t)sizeof(outh);
+            if (write(g_fuse_fd, &outh, sizeof(outh)) < 0) {}
+            continue;
         }
 
         if (opcode == FUSE_OPEN) {
@@ -1535,21 +2174,31 @@ int main(int argc, char **argv) {
             struct fuse_open_out oout;
             memset(&oout, 0, sizeof(oout));
             oout.fh = 1;
-            oout.open_flags = FOPEN_KEEP_CACHE;
+            oout.open_flags = FOPEN_DIRECT_IO; /* Direct I/O prevents stale kernel page cache hits */
 
             struct iovec iov[2];
             iov[0].iov_base = &outh;
             iov[0].iov_len = sizeof(outh);
             iov[1].iov_base = &oout;
             iov[1].iov_len = sizeof(oout);
-            writev(g_fuse_fd, iov, 2);
+            if (writev(g_fuse_fd, iov, 2) < 0) {}
             continue;
         }
 
         if (opcode == FUSE_READ) {
-            const struct fuse_read_in *rin = (const struct fuse_read_in *)(const void *)(in_buf + sizeof(*inh));
-            uint64_t offset = rin->offset;
-            uint32_t req_size = rin->size;
+            struct fuse_read_in rin;
+            size_t r_avail = (size_t)n > sizeof(inh) ? (size_t)n - sizeof(inh) : 0;
+            memset(&rin, 0, sizeof(rin));
+            if (r_avail > sizeof(rin)) r_avail = sizeof(rin);
+            if (r_avail > 0) memcpy(&rin, in_buf + sizeof(inh), r_avail);
+
+            uint64_t offset = rin.offset;
+            uint32_t req_size = rin.size;
+
+            /* Defensive clamp */
+            if (req_size > sizeof(out_buf) - sizeof(struct fuse_out_header)) {
+                req_size = (uint32_t)(sizeof(out_buf) - sizeof(struct fuse_out_header));
+            }
 
             if (offset >= (uint64_t)g_disk_size) {
                 /* Clean EOF */
@@ -1557,7 +2206,7 @@ int main(int argc, char **argv) {
                 memset(&outh, 0, sizeof(outh));
                 outh.unique = unique;
                 outh.len = (uint32_t)sizeof(outh);
-                write(g_fuse_fd, &outh, sizeof(outh));
+                if (write(g_fuse_fd, &outh, sizeof(outh)) < 0) {}
                 continue;
             }
 
@@ -1570,8 +2219,17 @@ int main(int argc, char **argv) {
             static uint64_t last_log_bytes = 0;
             total_read += (uint64_t)to_read;
 
-            uint64_t deadline_ms = now_ms() + 1500;
-            ntfs_serve_disk(out_buf, offset, (size_t)to_read, deadline_ms);
+            uint64_t deadline_ms = now_ms() + 2800;
+            int sres = ntfs_serve_disk(out_buf, offset, (size_t)to_read, deadline_ms);
+            if (sres < 0) {
+                struct fuse_out_header outh;
+                memset(&outh, 0, sizeof(outh));
+                outh.unique = unique;
+                outh.error = sres;
+                outh.len = (uint32_t)sizeof(outh);
+                if (write(g_fuse_fd, &outh, sizeof(outh)) < 0) {}
+                continue;
+            }
 
             if (total_read - last_log_bytes >= 2 * 1024 * 1024 || offset < 10000000ULL * BPS) {
                 last_log_bytes = total_read;
@@ -1593,14 +2251,18 @@ int main(int argc, char **argv) {
             iov[0].iov_len = sizeof(outh);
             iov[1].iov_base = out_buf;
             iov[1].iov_len = (size_t)to_read;
-            writev(g_fuse_fd, iov, 2);
+            if (writev(g_fuse_fd, iov, 2) < 0) {}
             continue;
         }
 
         if (opcode == FUSE_WRITE) {
             /* Absorb writes and return success */
-            const struct fuse_write_in *win = (const struct fuse_write_in *)(const void *)(in_buf + sizeof(*inh));
-            uint32_t written_size = win->size;
+            struct fuse_write_in win;
+            size_t w_avail = (size_t)n > sizeof(inh) ? (size_t)n - sizeof(inh) : 0;
+            memset(&win, 0, sizeof(win));
+            if (w_avail > sizeof(win)) w_avail = sizeof(win);
+            if (w_avail > 0) memcpy(&win, in_buf + sizeof(inh), w_avail);
+            uint32_t written_size = win.size;
 
             struct fuse_out_header outh;
             memset(&outh, 0, sizeof(outh));
@@ -1616,7 +2278,7 @@ int main(int argc, char **argv) {
             iov[0].iov_len = sizeof(outh);
             iov[1].iov_base = &wout;
             iov[1].iov_len = sizeof(wout);
-            writev(g_fuse_fd, iov, 2);
+            if (writev(g_fuse_fd, iov, 2) < 0) {}
             continue;
         }
 
@@ -1626,7 +2288,29 @@ int main(int argc, char **argv) {
         outh.unique = unique;
         outh.error = -ENOSYS;
         outh.len = (uint32_t)sizeof(outh);
-        write(g_fuse_fd, &outh, sizeof(outh));
+        if (write(g_fuse_fd, &outh, sizeof(outh)) < 0) {}
+    }
+
+    #undef in_buf
+    #undef out_buf
+
+    /* Clean shutdown of VOD prefetch worker */
+    if (vod_prefetch_thread_started) {
+        pthread_mutex_lock(&vod_mu);
+        vod_prefetch_abort = 1;
+        pthread_cond_broadcast(&vod_prefetch_cv);
+        pthread_cond_broadcast(&vod_done_cv);
+        pthread_mutex_unlock(&vod_mu);
+        vod_bg_sock_shutdown();
+        pthread_join(vod_prefetch_tid, NULL);
+    }
+
+    /* Free VOD head caches */
+    for (int i = 0; i < g_num_files; i++) {
+        if (g_files[i].head_cache) {
+            free(g_files[i].head_cache);
+            g_files[i].head_cache = NULL;
+        }
     }
 
     if (g_meta_fd >= 0) close(g_meta_fd);

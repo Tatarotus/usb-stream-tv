@@ -17,7 +17,7 @@
 
 /* ---- Production constants (exact copies from fuse_ntfs.h / fuse_ntfs.c) ---- */
 #define RINGSZ (128ULL * 1024 * 1024)
-#define NTFS_FILE_SIZE 8000000000ULL
+#define NTFS_FILE_SIZE 128000000000ULL
 #define MIN_STREAM_START (6ULL * 1024 * 1024)
 #define LEADBACK (16ULL * 1024 * 1024)
 #define HDRCACHESZ 65536

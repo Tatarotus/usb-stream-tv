@@ -19,46 +19,55 @@
 #include <netinet/tcp.h>
 
 #define TS_PKT_SZ 188
+/* 21 pacotes TS = 3948 bytes <= PIPE_BUF (4096 no Linux).
+ * Garante writes atômicos no kernel que nunca partem pacotes TS. */
+#define TS_WR_CHUNK (TS_PKT_SZ * 21)
+
+#ifndef F_SETPIPE_SZ
+#define F_SETPIPE_SZ 1031
+#endif
 
 static volatile sig_atomic_t running = 1;
 static void handle_sig(int s) { (void)s; running = 0; }
 
-/* Accumulator for strict 188-byte MPEG-TS packet alignment (135 KB in BSS) */
-static uint8_t g_acc[131072 + 4096];
+/* Accumulator para alinhamento estrito MPEG-TS de 188 bytes (68 KB no BSS) */
+static uint8_t g_acc[65536 + 4096];
 static size_t g_acc_len = 0;
 static uint64_t g_total_valid_bytes = 0;
 static uint64_t g_total_resync_drops = 0;
 
 static int64_t g_last_heartbeat = 0;
 
-/* BSS buffers to keep stack footprint strictly < 4KB on ARM32 */
+/* BSS buffers para manter a pilha estritamente < 4KB no Cortex-A7 */
 static uint8_t g_raw_buf[65536];
 static char g_header_buf[4096];
 
-/* DNS cache and resolution state */
+/* DNS cache e controle de conexão */
 static struct sockaddr_in g_cached_saddr;
 static int g_saddr_cached = 0;
-static int g_dns_fails = 0;
+static int g_connect_fails = 0;
 
 static int resolve_server_address(const char *host, int port, struct sockaddr_in *out_saddr) {
-    if (g_saddr_cached && g_dns_fails < 5) {
+    if (g_saddr_cached && g_connect_fails < 3) {
         *out_saddr = g_cached_saddr;
         return 0;
     }
 
-    memset(&g_cached_saddr, 0, sizeof(g_cached_saddr));
-    g_cached_saddr.sin_family = AF_INET;
-    g_cached_saddr.sin_port = htons((uint16_t)port);
+    struct sockaddr_in tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    tmp.sin_family = AF_INET;
+    tmp.sin_port = htons((uint16_t)port);
 
-    /* 1. Tenta IP numérico direto (zero overhead de rede) */
-    if (inet_pton(AF_INET, host, &g_cached_saddr.sin_addr) == 1) {
+    /* 1. Tenta IP numérico direto (zero overhead de rede e sem dependência de DNS) */
+    if (inet_pton(AF_INET, host, &tmp.sin_addr) == 1) {
+        g_cached_saddr = tmp;
         g_saddr_cached = 1;
-        g_dns_fails = 0;
+        g_connect_fails = 0;
         *out_saddr = g_cached_saddr;
         return 0;
     }
 
-    /* 2. Resolução estruturada via getaddrinfo */
+    /* 2. Resolução estruturada via getaddrinfo numa variável local */
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
@@ -69,18 +78,32 @@ static int resolve_server_address(const char *host, int port, struct sockaddr_in
     int rc = getaddrinfo(host, port_str, &hints, &res);
     if (rc == 0 && res) {
         struct sockaddr_in *sin = (struct sockaddr_in *)(void *)res->ai_addr;
-        g_cached_saddr.sin_addr = sin->sin_addr;
+        tmp.sin_addr = sin->sin_addr;
         freeaddrinfo(res);
+        g_cached_saddr = tmp;
         g_saddr_cached = 1;
-        g_dns_fails = 0;
+        g_connect_fails = 0;
         *out_saddr = g_cached_saddr;
         return 0;
     }
     if (res) freeaddrinfo(res);
 
-    /* 3. Fallback de IP seguro se DNS do Wi-Fi falhar */
-    fprintf(stderr, "[!] Falha no DNS para %s, usando fallback de IP seguro\n", host);
-    g_cached_saddr.sin_addr.s_addr = inet_addr("129.146.5.64");
+    /* 3. Se falhou o getaddrinfo mas já tínhamos um IP válido em cache, preserva o IP bom */
+    if (g_saddr_cached) {
+        fprintf(stderr, "[!] Falha no DNS para %s, mantendo IP em cache: %s\n",
+                host, inet_ntoa(g_cached_saddr.sin_addr));
+        *out_saddr = g_cached_saddr;
+        return 0;
+    }
+
+    /* 4. Fallback configurável (via SERVER_IP ou default) somente se nunca houve resolução */
+    const char *fallback_ip = getenv("SERVER_IP");
+    if (!fallback_ip || strlen(fallback_ip) == 0) {
+        fallback_ip = "129.146.5.64";
+    }
+    fprintf(stderr, "[!] Falha no DNS para %s sem cache prévio. Usando fallback: %s\n", host, fallback_ip);
+    tmp.sin_addr.s_addr = inet_addr(fallback_ip);
+    g_cached_saddr = tmp;
     g_saddr_cached = 1;
     *out_saddr = g_cached_saddr;
     return 0;
@@ -89,8 +112,7 @@ static int resolve_server_address(const char *host, int port, struct sockaddr_in
 static int feed_ts_bytes(int fifo_fd, const uint8_t *data, size_t len) {
     if (len == 0) return 0;
 
-    /* CRÍTICO 4: Se o acumulador for estourar, compacta mantendo os últimos pacotes
-     * para re-sincronismo em vez de descartar cegamente tudo (o que causa perda de PCR). */
+    /* Compacta acumulador mantendo os últimos pacotes se necessário */
     if (g_acc_len + len > sizeof(g_acc)) {
         size_t keep = (g_acc_len > TS_PKT_SZ * 4) ? (TS_PKT_SZ * 4) : g_acc_len;
         if (keep > 0) {
@@ -114,26 +136,40 @@ static int feed_ts_bytes(int fifo_fd, const uint8_t *data, size_t len) {
             }
             size_t valid_len = pkt_end - processed;
             size_t written = 0;
+
+            /* Escreve no FIFO não-bloqueante em blocos atômicos de 3948B (21 pacotes <= PIPE_BUF) */
             while (written < valid_len && running) {
-                /* ALTO 2: Poll com 2.5s no FIFO antes de escrever para evitar travar o socket TCP */
+                size_t n = valid_len - written;
+                if (n > TS_WR_CHUNK) n = TS_WR_CHUNK;
+
                 struct pollfd wf = { .fd = fifo_fd, .events = POLLOUT, .revents = 0 };
-                int pret = poll(&wf, 1, 2500);
-                if (pret <= 0) {
-                    if (pret < 0 && errno == EINTR) {
+                int pret = poll(&wf, 1, 2000); /* 2.0s timeout: preserva o orçamento de recuperação da TV */
+                if (pret < 0) {
+                    if (errno == EINTR) {
                         if (!running) break;
                         continue;
                     }
-                    /* Backpressure do leitor FUSE: pipe cheio > 2.5s */
+                    return -1;
+                }
+                if (pret == 0) {
+                    fprintf(stderr, "[!] FIFO write backpressure (>2.0s sem dreno pelo FUSE)\n");
+                    return -1;
+                }
+                if (wf.revents & (POLLERR | POLLHUP)) {
+                    fprintf(stderr, "[!] FIFO leitor desconectado (POLLHUP/POLLERR)\n");
                     return -1;
                 }
 
-                ssize_t w = write(fifo_fd, g_acc + processed + written, valid_len - written);
+                ssize_t w = write(fifo_fd, g_acc + processed + written, n);
                 if (w < 0) {
                     if (errno == EINTR) {
                         if (!running) break;
                         continue;
                     }
-                    if (errno == EPIPE) return -1; /* Leitor FUSE encerrou */
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        continue;
+                    }
+                    if (errno == EPIPE) return -1;
                     perror("write fifo");
                     return -1;
                 }
@@ -141,7 +177,7 @@ static int feed_ts_bytes(int fifo_fd, const uint8_t *data, size_t len) {
             }
             g_total_valid_bytes += written;
 
-            /* ALTO 3: Heartbeat via futimens (zero desgaste de flash NAND eMMC) */
+            /* Heartbeat atômico via futimens (zero desgaste de flash NAND eMMC) */
             struct timespec ts_hb;
             clock_gettime(CLOCK_MONOTONIC, &ts_hb);
             if (ts_hb.tv_sec - g_last_heartbeat >= 2) {
@@ -178,9 +214,7 @@ static int feed_ts_bytes(int fifo_fd, const uint8_t *data, size_t len) {
                 fprintf(stderr, "[!] Resynced TS stream: dropped %zu misaligned bytes\n", dropped);
                 processed = search;
             } else {
-                /* CRÍTICO 4: Se nenhum 0x47 foi encontrado no buffer restante,
-                 * descarta os múltiplos de 188B desalinhados mas PRESERVA o fragmento de cauda (<188B)
-                 * para que o próximo recv complete o pacote sem perder a continuidade de PTS/PCR! */
+                /* Nenhum 0x47 válido encontrado: descarta múltiplos de 188B e guarda cauda para o próximo recv */
                 if (g_acc_len - processed >= TS_PKT_SZ) {
                     size_t keep_tail = (g_acc_len - processed) % TS_PKT_SZ;
                     size_t dropped = (g_acc_len - processed) - keep_tail;
@@ -213,6 +247,9 @@ int main(int argc, char *argv[]) {
     if (argc > 3) port = atoi(argv[3]);
     if (argc > 4) path = argv[4];
 
+    const char *env_host = getenv("SERVER_HOST");
+    if (env_host && strlen(env_host) > 0) host = env_host;
+
     /* 1. Single-instance flock protection com FD_CLOEXEC */
     int lock_fd = open("/data/local/tmp/stream_fetcher.lock", O_CREAT | O_RDWR, 0660);
     if (lock_fd >= 0) {
@@ -227,14 +264,18 @@ int main(int argc, char *argv[]) {
             ssize_t pw = pwrite(lock_fd, pid_str, (size_t)plen, 0);
             (void)pw;
         }
+    } else {
+        perror("[!] Warning: open stream_fetcher.lock failed");
     }
 
-    /* 2. Self-sufficient FIFO creation com permissões seguras (0660) */
+    /* 2. Criação autônoma do FIFO com permissões seguras (0660) */
     struct stat st;
     if (stat(fifo_path, &st) != 0 || !S_ISFIFO(st.st_mode)) {
         unlink(fifo_path);
         if (mkfifo(fifo_path, 0660) == 0) {
             printf("[✓] Self-created FIFO pipe: %s\n", fifo_path);
+        } else {
+            perror("[!] mkfifo failed");
         }
     }
 
@@ -242,7 +283,7 @@ int main(int argc, char *argv[]) {
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handle_sig;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0; /* NO SA_RESTART: allow EINTR on blocking open/write to terminate cleanly */
+    sa.sa_flags = 0; /* NO SA_RESTART: allow EINTR on poll/write to terminate cleanly */
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
@@ -253,17 +294,17 @@ int main(int argc, char *argv[]) {
 
     printf("[*] stream_fetcher v2 starting: target %s:%d%s -> fifo %s\n", host, port, path, fifo_path);
 
+    int consecutive_connect_fails = 0;
+
     while (running) {
         printf("[*] Opening FIFO %s (waiting for reader)...\n", fifo_path);
         int fifo_fd = -1;
         while (running) {
-            /* ALTO 1: Open com O_NONBLOCK para não prender processo em D-state no boot */
+            /* Abre com O_NONBLOCK e MANTÉM O_NONBLOCK para writes nunca bloquearem em kernel */
             fifo_fd = open(fifo_path, O_WRONLY | O_NONBLOCK);
             if (fifo_fd >= 0) {
-                int fl = fcntl(fifo_fd, F_GETFL, 0);
-                if (fl >= 0) {
-                    fcntl(fifo_fd, F_SETFL, fl & ~O_NONBLOCK);
-                }
+                /* Expande capacidade do pipe para 1MB (Linux 2.6.35+) para amortecer jitter */
+                fcntl(fifo_fd, F_SETPIPE_SZ, 1024 * 1024);
                 break;
             }
             if (errno == ENXIO) {
@@ -287,16 +328,15 @@ int main(int argc, char *argv[]) {
             int sock = socket(AF_INET, SOCK_STREAM, 0);
             if (sock < 0) {
                 perror("socket");
-                sleep(2);
+                consecutive_connect_fails++;
+                usleep(500000);
                 continue;
             }
 
-            /* CRÍTICO 2: Timeouts estritos de 3s para garantir recuperação antes dos 3.5s do MStar */
-            struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
+            /* Timeouts estritos de 2.0s para garantir recuperação dentro dos 3.5s do MStar */
+            struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
             setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-            struct timeval snd_tv = { .tv_sec = 3, .tv_usec = 0 };
-            setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
+            setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
             int rcvbuf = 512 * 1024;
             setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
@@ -305,10 +345,17 @@ int main(int argc, char *argv[]) {
             if (connect(sock, (struct sockaddr *)&saddr, sizeof(saddr)) < 0) {
                 perror("connect");
                 close(sock);
-                g_dns_fails++;
-                sleep(2);
+                g_connect_fails++;
+                consecutive_connect_fails++;
+                if (consecutive_connect_fails > 2) {
+                    usleep(500000);
+                } else {
+                    usleep(100000);
+                }
                 continue;
             }
+
+            consecutive_connect_fails = 0;
 
             int opt = 1;
             setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt));
@@ -325,7 +372,7 @@ int main(int argc, char *argv[]) {
             setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
 #endif
 
-            /* Request HTTP/1.0 to disable Transfer-Encoding: chunked */
+            /* Request HTTP/1.0 para entrega direta de MPEG-TS puro */
             char req[512];
             if (port == 80) {
                 snprintf(req, sizeof(req),
@@ -345,20 +392,19 @@ int main(int argc, char *argv[]) {
             if (send(sock, req, strlen(req), 0) < 0) {
                 perror("send");
                 close(sock);
-                g_dns_fails++;
-                sleep(2);
+                g_connect_fails++;
                 continue;
             }
 
             printf("[✓] HTTP request sent. Reading response headers...\n");
 
-            /* CRÍTICO 1: Leitura bulk de cabeçalhos HTTP (elimina ~4000 syscalls) */
+            /* Leitura bulk de cabeçalhos HTTP (zero stall de syscalls) */
             size_t hlen = 0;
             char *hdr_end = NULL;
 
             while (hlen < sizeof(g_header_buf) - 1 && running) {
                 struct pollfd pfd = { .fd = sock, .events = POLLIN, .revents = 0 };
-                int pret = poll(&pfd, 1, 2500);
+                int pret = poll(&pfd, 1, 2000);
                 if (pret <= 0) {
                     if (pret < 0 && errno == EINTR) continue;
                     break;
@@ -378,36 +424,37 @@ int main(int argc, char *argv[]) {
             if (!hdr_end) {
                 fprintf(stderr, "[!] Failed to read HTTP headers (timeout/EOF). Reconnecting...\n");
                 close(sock);
-                g_dns_fails++;
-                sleep(1);
+                g_connect_fails++;
                 continue;
             }
 
             *hdr_end = '\0';
             if (strncmp(g_header_buf, "HTTP/1.", 7) != 0 ||
-                (strstr(g_header_buf, " 200 ") == NULL && strstr(g_header_buf, " 200\r\n") == NULL)) {
+                strncmp(g_header_buf + 8, " 200", 4) != 0) {
                 fprintf(stderr, "[!] Bad HTTP response status (not 200 OK). Reconnecting...\n");
                 close(sock);
-                g_dns_fails++;
-                sleep(2);
+                g_connect_fails++;
+                usleep(250000);
                 continue;
             }
 
-            /* Conexão confirmada com sucesso: zera falhas */
-            g_dns_fails = 0;
-            g_acc_len = 0;
-
-            int is_chunked = 0;
-            if (strstr(g_header_buf, "Transfer-Encoding: chunked") ||
-                strstr(g_header_buf, "transfer-encoding: chunked")) {
-                is_chunked = 1;
-                printf("[!] Warning: Server returned chunked transfer encoding, parsing chunks...\n");
+            /* Tratamento estrito de chunked: rejeita e reconecta */
+            if (strstr(g_header_buf, "chunked") || strstr(g_header_buf, "Chunked")) {
+                fprintf(stderr, "[!] Servidor retornou Transfer-Encoding chunked para HTTP/1.0. Reconectando...\n");
+                close(sock);
+                g_connect_fails++;
+                usleep(250000);
+                continue;
             }
 
-            /* CRÍTICO 1: Repassa dados do payload MPEG-TS já recebidos no buffer de cabeçalho! */
+            /* Sucesso de conexão: zera contador de falhas */
+            g_connect_fails = 0;
+            g_acc_len = 0;
+
+            /* Repassa payload MPEG-TS já recebido no buffer de cabeçalhos */
             char *body_start = hdr_end + 4;
             size_t body_len = hlen - (size_t)(body_start - g_header_buf);
-            if (body_len > 0 && !is_chunked) {
+            if (body_len > 0) {
                 if (feed_ts_bytes(fifo_fd, (const uint8_t *)body_start, body_len) < 0) {
                     close(sock);
                     close(fifo_fd);
@@ -423,135 +470,44 @@ int main(int argc, char *argv[]) {
             int64_t last_log = ts_log.tv_sec;
             int stream_err = 0;
 
-            if (!is_chunked) {
-                /* Fast raw stream path */
-                while (running) {
-                    struct pollfd pfd = { .fd = sock, .events = POLLIN, .revents = 0 };
-                    int pret = poll(&pfd, 1, 2500);
-                    if (pret <= 0) {
-                        if (pret < 0 && errno == EINTR) continue;
-                        fprintf(stderr, "[!] Socket timeout (2.5s without data from server). Reconnecting...\n");
-                        close(sock);
-                        sock = -1;
-                        g_dns_fails++;
-                        break;
-                    }
-
-                    ssize_t n = recv(sock, g_raw_buf, sizeof(g_raw_buf), 0);
-                    if (n < 0) {
-                        if (errno == EINTR) continue;
-                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                            fprintf(stderr, "[!] Socket timeout. Reconnecting...\n");
-                        } else {
-                            fprintf(stderr, "[!] Server connection closed (%s)\n", strerror(errno));
-                        }
-                        g_dns_fails++;
-                        break;
-                    }
-                    if (n == 0) {
-                        fprintf(stderr, "[!] Server connection closed cleanly. Reconnecting...\n");
-                        break;
-                    }
-
-                    if (feed_ts_bytes(fifo_fd, g_raw_buf, (size_t)n) < 0) {
-                        stream_err = 1;
-                        break;
-                    }
-
-                    struct timespec ts_now;
-                    clock_gettime(CLOCK_MONOTONIC, &ts_now);
-                    if (ts_now.tv_sec - last_log >= 10) {
-                        printf("[*] Streaming active: %.2f MB valid TS (resync drops: %llu bytes)\n",
-                               (double)g_total_valid_bytes / (1024.0 * 1024.0),
-                               (unsigned long long)g_total_resync_drops);
-                        last_log = ts_now.tv_sec;
-                    }
+            while (running) {
+                struct pollfd pfd = { .fd = sock, .events = POLLIN, .revents = 0 };
+                int pret = poll(&pfd, 1, 2000);
+                if (pret <= 0) {
+                    if (pret < 0 && errno == EINTR) continue;
+                    fprintf(stderr, "[!] Socket timeout (2.0s sem dados). Reconectando...\n");
+                    close(sock);
+                    sock = -1;
+                    break;
                 }
-            } else {
-                /* Chunked stream decoder path */
-                while (running) {
-                    /* Read chunk size in hex */
-                    char chunk_sz_str[32];
-                    size_t csi = 0;
-                    int chunked_timeout = 0;
-                    while (csi < sizeof(chunk_sz_str) - 1 && running) {
-                        struct pollfd pfd = { .fd = sock, .events = POLLIN, .revents = 0 };
-                        int pret = poll(&pfd, 1, 2500);
-                        if (pret <= 0) {
-                            if (pret < 0 && errno == EINTR) continue;
-                            fprintf(stderr, "[!] Socket timeout (2.5s without data from server). Reconnecting...\n");
-                            close(sock);
-                            sock = -1;
-                            chunked_timeout = 1;
-                            break;
-                        }
 
-                        char c;
-                        ssize_t n = recv(sock, &c, 1, 0);
-                        if (n <= 0) break;
-                        if (c == '\n') break;
-                        if (c != '\r') chunk_sz_str[csi++] = c;
+                ssize_t n = recv(sock, g_raw_buf, sizeof(g_raw_buf), 0);
+                if (n < 0) {
+                    if (errno == EINTR) continue;
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        fprintf(stderr, "[!] Socket recv timeout. Reconectando...\n");
+                    } else {
+                        fprintf(stderr, "[!] Server connection closed (%s)\n", strerror(errno));
                     }
-                    if (chunked_timeout || sock < 0) break;
+                    break;
+                }
+                if (n == 0) {
+                    fprintf(stderr, "[!] Server connection closed cleanly. Reconectando...\n");
+                    break;
+                }
 
-                    chunk_sz_str[csi] = '\0';
-                    long chunk_sz = strtol(chunk_sz_str, NULL, 16);
-                    if (chunk_sz <= 0) {
-                        fprintf(stderr, "[!] Chunked stream end (%ld). Reconnecting...\n", chunk_sz);
-                        break;
-                    }
+                if (feed_ts_bytes(fifo_fd, g_raw_buf, (size_t)n) < 0) {
+                    stream_err = 1;
+                    break;
+                }
 
-                    /* Read exactly chunk_sz bytes */
-                    size_t chunk_read = 0;
-                    while (chunk_read < (size_t)chunk_sz && running) {
-                        struct pollfd pfd = { .fd = sock, .events = POLLIN, .revents = 0 };
-                        int pret = poll(&pfd, 1, 2500);
-                        if (pret <= 0) {
-                            if (pret < 0 && errno == EINTR) continue;
-                            fprintf(stderr, "[!] Socket timeout (2.5s without data from server). Reconnecting...\n");
-                            close(sock);
-                            sock = -1;
-                            chunked_timeout = 1;
-                            break;
-                        }
-
-                        size_t to_read = (size_t)chunk_sz - chunk_read;
-                        if (to_read > sizeof(g_raw_buf)) to_read = sizeof(g_raw_buf);
-                        ssize_t n = recv(sock, g_raw_buf, to_read, 0);
-                        if (n <= 0) {
-                            if (n < 0 && errno == EINTR) continue;
-                            break;
-                        }
-                        if (feed_ts_bytes(fifo_fd, g_raw_buf, (size_t)n) < 0) {
-                            stream_err = 1;
-                            break;
-                        }
-                        chunk_read += (size_t)n;
-                    }
-                    if (stream_err || chunk_read < (size_t)chunk_sz || chunked_timeout || sock < 0) break;
-
-                    /* Consume trailing \r\n */
-                    struct pollfd pfd_crlf = { .fd = sock, .events = POLLIN, .revents = 0 };
-                    int pret = poll(&pfd_crlf, 1, 2500);
-                    if (pret <= 0) {
-                        if (pret < 0 && errno == EINTR) continue;
-                        fprintf(stderr, "[!] Socket timeout (2.5s without data from server). Reconnecting...\n");
-                        close(sock);
-                        sock = -1;
-                        break;
-                    }
-                    if (pret > 0) {
-                        char crlf[2];
-                        recv(sock, crlf, 2, MSG_WAITALL);
-                    }
-
-                    struct timespec ts_now;
-                    clock_gettime(CLOCK_MONOTONIC, &ts_now);
-                    if (ts_now.tv_sec - last_log >= 10) {
-                        printf("[*] Chunked streaming: %.2f MB valid TS\n",
-                               (double)g_total_valid_bytes / (1024.0 * 1024.0));
-                        last_log = ts_now.tv_sec;
-                    }
+                struct timespec ts_now;
+                clock_gettime(CLOCK_MONOTONIC, &ts_now);
+                if (ts_now.tv_sec - last_log >= 10) {
+                    printf("[*] Streaming active: %.2f MB valid TS (resync drops: %llu bytes)\n",
+                           (double)g_total_valid_bytes / (1024.0 * 1024.0),
+                           (unsigned long long)g_total_resync_drops);
+                    last_log = ts_now.tv_sec;
                 }
             }
 
@@ -559,10 +515,10 @@ int main(int argc, char *argv[]) {
             if (stream_err) {
                 close(fifo_fd);
                 fifo_fd = -1;
-                break; /* Reopen FIFO */
+                break; /* Reabre FIFO */
             }
             if (!running) break;
-            sleep(1);
+            /* Reconexão imediata sem sleep(1) fixo */
         }
         if (fifo_fd >= 0) close(fifo_fd);
     }

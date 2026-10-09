@@ -441,13 +441,15 @@ def refresh_vod_templates():
                     raw_title = task.get("title") or task.get("display_name") or "Vídeo"
                     new_fat_name = format_fat_media_name(raw_title)
                     old_disp = task.get("display_name")
-                    if old_disp != new_fat_name or not os.path.exists(out_tmpl):
+                    cur_fsize = os.path.getsize(out_file)
+                    if old_disp != new_fat_name or not os.path.exists(out_tmpl) or task.get("file_size") != cur_fsize:
                         task["display_name"] = new_fat_name
                         task["template_path"] = out_tmpl
+                        task["file_size"] = cur_fsize
                         try:
-                            fsize = min(os.path.getsize(out_file), 4294967000)
+                            fsize = min(cur_fsize, 4294967000)
                             gen_template.build_fat_template(file_name=new_fat_name, file_size=fsize, out_path=out_tmpl)
-                            print(f"[✓ TEMPLATE] Atualizado template FAT32 para {new_fat_name} ({tid})")
+                            print(f"[✓ TEMPLATE] Atualizado template FAT32 para {new_fat_name} ({tid}, {fsize} bytes)")
                             updated = True
                         except Exception as e:
                             print(f"[!] Erro ao atualizar template {tid}: {e}")
@@ -2946,6 +2948,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                 if can_copy_video:
                     cmd = [
                         "ffmpeg", "-y", "-i", raw_file,
+                        "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-map_chapters", "-1",
                         "-c:v", "copy",
                         "-c:a", "ac3", "-b:a", "384k", "-ar", "48000", "-ac", "2",
                         "-movflags", "+faststart",
@@ -2958,6 +2961,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                 else:
                     cmd = [
                         "ffmpeg", "-y", "-i", raw_file,
+                        "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-map_chapters", "-1",
                         "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
                         "-r", "30",
                         "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.1",
@@ -3088,6 +3092,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     print(f"[VOD] Transcodificando para Samsung TV H.264 '{clean_title}'...")
 
                 cmd.extend([
+                    "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-map_chapters", "-1",
                     "-c:a", "ac3", "-b:a", "384k", "-ar", "48000", "-ac", "2",
                     "-movflags", "+faststart",
                     "-f", "mp4",

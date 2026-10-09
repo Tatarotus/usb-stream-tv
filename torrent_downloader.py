@@ -571,6 +571,7 @@ def build_ffmpeg_transcode_command(
 
         return [
             "ffmpeg", "-y", "-i", video_path,
+            "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-map_chapters", "-1",
             "-vf", vf_filter,
             "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.1",
             "-pix_fmt", "yuv420p",
@@ -583,6 +584,7 @@ def build_ffmpeg_transcode_command(
     elif can_copy_video:
         return [
             "ffmpeg", "-y", "-i", video_path,
+            "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-map_chapters", "-1",
             "-c:v", "copy",
             "-c:a", "ac3", "-b:a", "384k", "-ar", "48000", "-ac", "2",
             "-movflags", "+faststart",
@@ -592,6 +594,7 @@ def build_ffmpeg_transcode_command(
     else:
         return [
             "ffmpeg", "-y", "-i", video_path,
+            "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-map_chapters", "-1",
             "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
             "-r", "30",
             "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.1",

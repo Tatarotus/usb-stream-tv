@@ -94,7 +94,7 @@
         .app-container {
             width: 100%;
             max-width: 640px;
-            padding: max(16px, env(safe-area-inset-top)) 16px 24px 16px;
+            padding: max(16px, env(safe-area-inset-top)) 16px calc(96px + env(safe-area-inset-bottom, 0px)) 16px;
             display: flex;
             flex-direction: column;
             gap: 16px;
@@ -386,13 +386,13 @@
             background: #0f172a;
         }
         .btn-clear-search {
-            position: absolute;
-            right: 8px;
-            width: 42px;
-            height: 42px;
+            position: static;
+            width: 44px;
+            height: 44px;
+            flex-shrink: 0;
             background: rgba(255, 255, 255, 0.12);
-            border: 2px solid rgba(255, 255, 255, 0.25);
-            border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            border-radius: 12px;
             color: #ffffff;
             font-size: 20px;
             font-weight: 900;
@@ -405,6 +405,19 @@
         .btn-clear-search:active {
             background: var(--red);
             transform: scale(0.92);
+        }
+        .search-box-wrapper > .btn-clear-search {
+            position: absolute !important;
+            right: 10px !important;
+            top: 50% !important;
+            transform: translateY(-50%) !important;
+        }
+        .search-actions-group .btn-clear-search,
+        .drawer-search-actions .btn-clear-search {
+            position: static !important;
+            right: auto !important;
+            top: auto !important;
+            transform: none !important;
         }
 
         /* Barra de Informação de Páginas e Itens */
@@ -1406,167 +1419,80 @@
             display: block;
         }
 
-        /* 3. BASE FIXA: Zona do Polegar (Controle Remoto de TV Físico) */
-        .fixed-remote-bar {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: rgba(11, 15, 25, 0.97);
-            backdrop-filter: blur(14px);
-            -webkit-backdrop-filter: blur(14px);
-            border-top: 3px solid var(--border);
-            padding: 10px 16px max(10px, env(safe-area-inset-bottom)) 16px;
-            display: flex;
-            justify-content: center;
-            z-index: 1000;
-            box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.7);
-            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
-            transform: translateY(0);
-        }
-
-        .fixed-remote-bar.hidden-down {
-            transform: translateY(100%);
-            opacity: 0;
-            pointer-events: none;
-        }
-
-        .remote-controls-wrapper {
-            width: 100%;
-            max-width: 640px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        /* Botão Unificado Principal: TV AO VIVO */
-        .btn-remote-live-tv {
-            width: 100%;
-            height: 58px;
-            background: linear-gradient(135deg, #1e3a5f 0%, #1d4ed8 100%);
-            border: 2px solid #3b82f6;
-            border-radius: 14px;
-            color: #ffffff;
-            font-family: var(--font-family);
-            font-size: 19px;
-            font-weight: 900;
+        /* 3. Barra de Paginação Inline Sênior (Stitch Mobile / Anexos do Usuário) */
+        .catalog-paginator-row {
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 10px;
-            cursor: pointer;
-            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
-            transition: all 0.15s ease;
-        }
-        .btn-remote-live-tv:active {
-            transform: scale(0.97);
-            background: #2563eb;
-            box-shadow: 0 2px 6px rgba(37, 99, 235, 0.5);
-        }
-        .btn-remote-live-tv:focus-visible {
-            outline: 4px solid var(--gold);
-            outline-offset: 2px;
-        }
-
-        .remote-row {
-            display: flex;
             gap: 12px;
             width: 100%;
+            margin-top: 24px;
+            margin-bottom: 24px;
+            padding: 0 4px;
+            box-sizing: border-box;
         }
-
-        .btn-remote {
+        .btn-paginator-action {
             flex: 1;
-            height: 64px;
+            min-height: 56px;
             background: #1e293b;
-            border: 3px solid #475569;
-            border-radius: 14px;
             color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 14px;
+            font-size: 18px;
+            font-weight: 700;
             font-family: var(--font-family);
-            font-size: 20px;
-            font-weight: 900;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 10px;
+            gap: 8px;
             cursor: pointer;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
-            transition: all 0.1s ease;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            transition: all 0.15s ease;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
         }
-        .btn-remote:active {
-            transform: scale(0.96);
-            background: #334155;
-            border-color: var(--gold);
+        .btn-paginator-action .material-symbols-outlined {
+            font-size: 22px;
+            font-weight: 700;
         }
-        .btn-remote:focus-visible {
-            outline: 4px solid var(--gold);
-            outline-offset: 2px;
+        .btn-paginator-action:active:not(:disabled) {
+            transform: scale(0.97);
+            background: #2b3952;
         }
-
-        .btn-remote-ch {
-            background: #1e3a5f;
-            border-color: #2563eb;
-            color: #ffffff;
-        }
-        .btn-remote-ch:active {
-            background: #2563eb;
-        }
-
-        .btn-remote-vol {
-            height: 56px;
-            font-size: 18px;
-            background: #1e293b;
-        }
-
-        .btn-remote-mute {
-            height: 56px;
-            font-size: 18px;
-            background: var(--red-bg);
-            border-color: #ef4444;
-            color: var(--red);
-        }
-        .btn-remote-mute:active {
-            background: #ef4444;
-            color: #ffffff;
-        }
-
-        /* Botões de Navegação / Paginação do Polegar */
-        .btn-remote-nav {
-            height: 58px;
-            font-size: 18px;
-            background: #1e293b;
-            border: 3px solid #475569;
-            color: #ffffff;
-        }
-        .btn-remote-nav:active {
-            background: #334155;
-            border-color: var(--gold);
-        }
-        .btn-remote-nav[disabled] {
+        .btn-paginator-action:disabled {
             opacity: 0.35;
             cursor: not-allowed;
             pointer-events: none;
+            box-shadow: none;
+        }
+        .btn-paginator-top {
+            width: 56px;
+            height: 56px;
+            flex-shrink: 0;
+            background: #ffb95f;
+            color: #1a1202;
+            border: none;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            transition: all 0.15s ease;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .btn-paginator-top .material-symbols-outlined {
+            font-size: 28px;
+            font-weight: 800;
+            color: #1a1202;
+        }
+        .btn-paginator-top:active {
+            transform: scale(0.95);
+            background: #e5a450;
         }
 
-        /* Botão Destaque: Voltar ao Topo */
-        .btn-remote-top {
-            height: 58px;
-            font-size: 17px;
-            background: #27272a;
-            border: 3px solid #eab308;
-            color: #facc15;
-            font-weight: 900;
-            box-shadow: 0 4px 12px rgba(234, 179, 8, 0.2);
-        }
-        .btn-remote-top:active {
-            background: #facc15;
-            color: #000000;
-            transform: scale(0.96);
-        }
 
-        /* Oculta a Barra Fixa do Controle quando o Teclado Virtual Abre no Celular */
-        body.keyboard-open .fixed-remote-bar {
-            display: none !important;
-        }
 
         .btn-reconnect {
             height: 56px; /* Ajustado para 56px */
@@ -2398,21 +2324,6 @@
                 border-color: #3b82f6;
                 box-shadow: 0 8px 24px rgba(37, 99, 235, 0.25);
             }
-
-            /* Barra Fixa Inferior: Dock Flutuante Centralizado */
-            .fixed-remote-bar {
-                left: 50%;
-                transform: translateX(-50%);
-                max-width: 760px;
-                bottom: 18px;
-                border-radius: 20px;
-                background: rgba(15, 23, 42, 0.95);
-                backdrop-filter: blur(16px);
-                border: 2px solid var(--border);
-                box-shadow: 0 16px 45px rgba(0, 0, 0, 0.8);
-            }
-            .fixed-remote-bar.hidden-down {
-                transform: translate(-50%, 130%);
             }
         /* Garante que dentro do App Mobile instalado (PWA/APK) os botões de PC nunca apareçam */
         @media (display-mode: standalone) and (max-width: 1024px) {
@@ -2429,11 +2340,11 @@
         /* ==================== ESTILOS STITCH SENIOR MOBILE REDESIGN ==================== */
 
         /* 3D Tactile Buttons & Surfaces */
-        .btn-mode-tab, .cat-quick-box, .btn-modal-action, .btn-remote, .bottom-nav-item, .btn-voice-search, .pwa-install-btn {
+        .btn-mode-tab, .cat-quick-box, .btn-modal-action, .btn-paginator-action, .btn-paginator-top, .bottom-nav-item, .btn-voice-search, .pwa-install-btn {
             box-shadow: 0 4px 0 rgba(0, 0, 0, 0.45);
             transition: transform 0.1s ease, box-shadow 0.1s ease, background 0.15s ease;
         }
-        .btn-mode-tab:active, .cat-quick-box:active, .btn-modal-action:active, .btn-remote:active, .bottom-nav-item:active, .btn-voice-search:active {
+        .btn-mode-tab:active, .cat-quick-box:active, .btn-modal-action:active, .btn-paginator-action:active, .btn-paginator-top:active, .bottom-nav-item:active, .btn-voice-search:active {
             transform: translateY(2px) !important;
             box-shadow: 0 2px 0 rgba(0, 0, 0, 0.45) !important;
         }
@@ -2534,7 +2445,7 @@
             background: var(--surface-card) !important;
             border: 2px solid var(--border) !important;
             border-radius: 14px !important;
-            padding: 0 120px 0 16px !important;
+            padding: 0 180px 0 16px !important;
             font-size: 18px !important;
             font-weight: 600 !important;
             color: #ffffff !important;
@@ -2550,9 +2461,12 @@
         .search-actions-group {
             position: absolute;
             right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 8px;
+            z-index: 5;
         }
         .btn-voice-search {
             min-height: 46px;
@@ -2560,7 +2474,7 @@
             background: var(--secondary-container);
             color: var(--on-secondary);
             border: none;
-            border-radius: 10px;
+            border-radius: 12px;
             font-size: 16px;
             font-weight: 800;
             font-family: var(--font-family);
@@ -2569,6 +2483,7 @@
             gap: 4px;
             cursor: pointer;
             box-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
+            flex-shrink: 0;
         }
         .btn-voice-search.listening {
             background: #ef4444 !important;
@@ -2581,16 +2496,21 @@
             100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
         }
         .btn-clear-search {
+            position: static !important;
+            right: auto !important;
+            top: auto !important;
+            transform: none !important;
             width: 44px;
             height: 44px;
             background: var(--surface-variant) !important;
             color: var(--text-muted) !important;
-            border: none !important;
-            border-radius: 10px !important;
+            border: 1px solid var(--border-prominent) !important;
+            border-radius: 12px !important;
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
             cursor: pointer !important;
+            flex-shrink: 0 !important;
         }
         .btn-clear-search:hover, .btn-clear-search:active {
             color: #ffffff !important;
@@ -2826,7 +2746,7 @@
             background: var(--surface-card);
             border: 2px solid var(--border-prominent);
             border-radius: 14px;
-            padding: 0 100px 0 46px;
+            padding: 0 170px 0 46px;
             font-size: 17px;
             font-weight: 600;
             color: #ffffff;
@@ -2839,10 +2759,10 @@
         }
         .drawer-search-actions {
             position: absolute;
-            right: 6px;
+            right: 8px;
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 8px;
         }
         .drawer-alphabet-bar {
             display: flex;
@@ -3297,16 +3217,6 @@
             transform: translateY(2px);
         }
 
-        /* Ajuste do Remote Bar para ficar acima do Bottom Nav */
-        .fixed-remote-bar {
-            bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important;
-            border-top: none !important;
-            background: transparent !important;
-            pointer-events: none;
-        }
-        .remote-controls-wrapper {
-            pointer-events: auto;
-        }
 </style>
 </head>
 <body>
@@ -3439,12 +3349,12 @@
                            placeholder="Ex: 007, Cassino Royale, Vingadores..."
                            oninput="onMovieSearch(this.value)" autocomplete="off">
                     <div class="search-actions-group">
+                        <button id="movie-search-clear" class="btn-clear-search" onclick="clearMovieSearch()" style="display: none;" aria-label="Limpar busca">
+                            <span class="material-symbols-outlined">backspace</span>
+                        </button>
                         <button id="movie-voice-btn" class="btn-voice-search" type="button" onclick="startVoiceSearch('movie-search-input', 'movie')" aria-label="Falar pelo Microfone">
                             <span class="material-symbols-outlined">mic</span>
                             <span>Falar</span>
-                        </button>
-                        <button id="movie-search-clear" class="btn-clear-search" onclick="clearMovieSearch()" style="display: none;" aria-label="Limpar busca">
-                            <span class="material-symbols-outlined">backspace</span>
                         </button>
                     </div>
                 </div>
@@ -3475,6 +3385,21 @@
                 </div>
             </div>
 
+            <!-- Barra de Paginação Inline Sênior (Stitch Mobile) -->
+            <div class="catalog-paginator-row" id="movie-paginator-row">
+                <button class="btn-paginator-action btn-paginator-prev" onclick="prevPage()" aria-label="Página anterior">
+                    <span class="material-symbols-outlined">arrow_back</span>
+                    <span>Anterior</span>
+                </button>
+                <button class="btn-paginator-top" onclick="scrollToTop()" aria-label="Voltar ao topo da lista">
+                    <span class="material-symbols-outlined">vertical_align_top</span>
+                </button>
+                <button class="btn-paginator-action btn-paginator-next" onclick="nextPage()" aria-label="Próxima página">
+                    <span>Próxima</span>
+                    <span class="material-symbols-outlined">arrow_forward</span>
+                </button>
+            </div>
+
         </div>
  
          <!-- ==================== ÁREA DO MODO SÉRIES ==================== -->
@@ -3491,12 +3416,12 @@
                             placeholder="Ex: Chaves, Sobrenatural, Novela..."
                             oninput="onSeriesSearch(this.value)" autocomplete="off">
                      <div class="search-actions-group">
+                         <button id="series-search-clear" class="btn-clear-search" onclick="clearSeriesSearch()" style="display: none;" aria-label="Limpar busca">
+                             <span class="material-symbols-outlined">backspace</span>
+                         </button>
                          <button id="series-voice-btn" class="btn-voice-search" type="button" onclick="startVoiceSearch('series-search-input', 'series')" aria-label="Falar pelo Microfone">
                              <span class="material-symbols-outlined">mic</span>
                              <span>Falar</span>
-                         </button>
-                         <button id="series-search-clear" class="btn-clear-search" onclick="clearSeriesSearch()" style="display: none;" aria-label="Limpar busca">
-                             <span class="material-symbols-outlined">backspace</span>
                          </button>
                      </div>
                  </div>
@@ -3527,6 +3452,21 @@
                  </div>
              </div>
 
+             <!-- Barra de Paginação Inline Sênior (Stitch Mobile) -->
+             <div class="catalog-paginator-row" id="series-paginator-row">
+                 <button class="btn-paginator-action btn-paginator-prev" onclick="prevPage()" aria-label="Página anterior">
+                     <span class="material-symbols-outlined">arrow_back</span>
+                     <span>Anterior</span>
+                 </button>
+                 <button class="btn-paginator-top" onclick="scrollToTop()" aria-label="Voltar ao topo da lista">
+                     <span class="material-symbols-outlined">vertical_align_top</span>
+                 </button>
+                 <button class="btn-paginator-action btn-paginator-next" onclick="nextPage()" aria-label="Próxima página">
+                     <span>Próxima</span>
+                     <span class="material-symbols-outlined">arrow_forward</span>
+                 </button>
+             </div>
+
          </div>
 
          <!-- ==================== ÁREA DO MODO TV AO VIVO ==================== -->
@@ -3548,12 +3488,12 @@
                            placeholder="Ex: Globo, SBT, SporTV, ESPN, Record..."
                            oninput="onChannelSearch(this.value)" autocomplete="off">
                     <div class="search-actions-group">
+                        <button id="channel-search-clear" class="btn-clear-search" onclick="clearChannelSearch()" style="display: none;" aria-label="Limpar busca">
+                            <span class="material-symbols-outlined">backspace</span>
+                        </button>
                         <button id="channel-voice-btn" class="btn-voice-search" type="button" onclick="startVoiceSearch('channel-search-input', 'live')" aria-label="Falar pelo Microfone">
                             <span class="material-symbols-outlined">mic</span>
                             <span>Falar</span>
-                        </button>
-                        <button id="channel-search-clear" class="btn-clear-search" onclick="clearChannelSearch()" style="display: none;" aria-label="Limpar busca">
-                            <span class="material-symbols-outlined">backspace</span>
                         </button>
                     </div>
                 </div>
@@ -3583,26 +3523,23 @@
                 </div>
             </div>
 
-        </div>
-
-    </div>
-
-    <!-- BASE FIXA: Zona do Polegar (Controles de Navegação e Topo) -->
-    <div class="fixed-remote-bar">
-        <div class="remote-controls-wrapper">
-            <!-- Paginação e Voltar ao Topo -->
-            <div class="remote-row">
-                <button id="btn-remote-prev-page" class="btn-remote btn-remote-nav" onclick="prevPage()" aria-label="Página anterior">
-                    <span>◄</span> ANTERIOR
+            <!-- Barra de Paginação Inline Sênior (Stitch Mobile) -->
+            <div class="catalog-paginator-row" id="live-paginator-row">
+                <button class="btn-paginator-action btn-paginator-prev" onclick="prevPage()" aria-label="Página anterior">
+                    <span class="material-symbols-outlined">arrow_back</span>
+                    <span>Anterior</span>
                 </button>
-                <button id="btn-remote-top" class="btn-remote btn-remote-top" onclick="scrollToTop()" aria-label="Voltar ao topo da lista">
-                    🔝 VOLTAR AO TOPO
+                <button class="btn-paginator-top" onclick="scrollToTop()" aria-label="Voltar ao topo da lista">
+                    <span class="material-symbols-outlined">vertical_align_top</span>
                 </button>
-                <button id="btn-remote-next-page" class="btn-remote btn-remote-nav" onclick="nextPage()" aria-label="Próxima página">
-                    PRÓXIMO <span>►</span>
+                <button class="btn-paginator-action btn-paginator-next" onclick="nextPage()" aria-label="Próxima página">
+                    <span>Próxima</span>
+                    <span class="material-symbols-outlined">arrow_forward</span>
                 </button>
             </div>
+
         </div>
+
     </div>
 
     <!-- NAVEGAÇÃO DE MODOS FIXA NO RODAPÉ (ZONA DO POLEGAR SÊNIOR) -->
@@ -7281,18 +7218,21 @@
 
         function scrollToTop() {
             triggerHaptic();
-            const bar = document.querySelector('.fixed-remote-bar');
-            if (bar) bar.classList.remove('hidden-down');
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
         function scrollToCatalogTop() {
-            const bar = document.querySelector('.fixed-remote-bar');
-            if (bar) bar.classList.remove('hidden-down');
-            const toggle = document.querySelector('.main-mode-toggle');
-            if (toggle) {
-                const rect = toggle.getBoundingClientRect();
-                const targetY = window.pageYOffset + rect.top;
+            let targetElem = null;
+            if (currentAppMode === 'cinema') {
+                targetElem = document.getElementById('movie-status-bar') || document.getElementById('movie-categories');
+            } else if (currentAppMode === 'series') {
+                targetElem = document.getElementById('series-status-bar') || document.getElementById('series-categories');
+            } else {
+                targetElem = document.getElementById('live-status-bar') || document.getElementById('live-categories');
+            }
+            if (targetElem) {
+                const rect = targetElem.getBoundingClientRect();
+                const targetY = window.pageYOffset + rect.top - 80;
                 window.scrollTo({ top: Math.max(0, targetY), behavior: 'smooth' });
                 return;
             }
@@ -7300,48 +7240,61 @@
         }
 
         function updatePaginationUI() {
-            const prevBtn = document.getElementById('btn-remote-prev-page');
-            const nextBtn = document.getElementById('btn-remote-next-page');
-            if (!prevBtn || !nextBtn) return;
-
-            if (currentAppMode === 'saved') {
-                prevBtn.disabled = true;
-                prevBtn.style.opacity = '0.35';
-                prevBtn.style.pointerEvents = 'none';
-                nextBtn.disabled = true;
-                nextBtn.style.opacity = '0.35';
-                nextBtn.style.pointerEvents = 'none';
-                return;
+            // Atualiza paginador do Cinema
+            const movieRow = document.getElementById('movie-paginator-row');
+            if (movieRow) {
+                const prev = movieRow.querySelector('.btn-paginator-prev');
+                const next = movieRow.querySelector('.btn-paginator-next');
+                if (prev) {
+                    const dis = (moviePage <= 1);
+                    prev.disabled = dis;
+                    prev.style.opacity = dis ? '0.35' : '1';
+                    prev.style.pointerEvents = dis ? 'none' : 'auto';
+                }
+                if (next) {
+                    const dis = (moviePage >= movieTotalPages);
+                    next.disabled = dis;
+                    next.style.opacity = dis ? '0.35' : '1';
+                    next.style.pointerEvents = dis ? 'none' : 'auto';
+                }
             }
 
-            let curPage = livePage;
-            let totalP = liveTotalPages;
-            if (currentAppMode === 'cinema') {
-                curPage = moviePage;
-                totalP = movieTotalPages;
-            } else if (currentAppMode === 'series') {
-                curPage = seriesPage;
-                totalP = seriesTotalPages;
+            // Atualiza paginador de Séries
+            const seriesRow = document.getElementById('series-paginator-row');
+            if (seriesRow) {
+                const prev = seriesRow.querySelector('.btn-paginator-prev');
+                const next = seriesRow.querySelector('.btn-paginator-next');
+                if (prev) {
+                    const dis = (seriesPage <= 1);
+                    prev.disabled = dis;
+                    prev.style.opacity = dis ? '0.35' : '1';
+                    prev.style.pointerEvents = dis ? 'none' : 'auto';
+                }
+                if (next) {
+                    const dis = (seriesPage >= seriesTotalPages);
+                    next.disabled = dis;
+                    next.style.opacity = dis ? '0.35' : '1';
+                    next.style.pointerEvents = dis ? 'none' : 'auto';
+                }
             }
 
-            if (curPage <= 1) {
-                prevBtn.disabled = true;
-                prevBtn.style.opacity = '0.35';
-                prevBtn.style.pointerEvents = 'none';
-            } else {
-                prevBtn.disabled = false;
-                prevBtn.style.opacity = '1';
-                prevBtn.style.pointerEvents = 'auto';
-            }
-
-            if (curPage >= totalP) {
-                nextBtn.disabled = true;
-                nextBtn.style.opacity = '0.35';
-                nextBtn.style.pointerEvents = 'none';
-            } else {
-                nextBtn.disabled = false;
-                nextBtn.style.opacity = '1';
-                nextBtn.style.pointerEvents = 'auto';
+            // Atualiza paginador de Ao Vivo
+            const liveRow = document.getElementById('live-paginator-row');
+            if (liveRow) {
+                const prev = liveRow.querySelector('.btn-paginator-prev');
+                const next = liveRow.querySelector('.btn-paginator-next');
+                if (prev) {
+                    const dis = (livePage <= 1);
+                    prev.disabled = dis;
+                    prev.style.opacity = dis ? '0.35' : '1';
+                    prev.style.pointerEvents = dis ? 'none' : 'auto';
+                }
+                if (next) {
+                    const dis = (livePage >= liveTotalPages);
+                    next.disabled = dis;
+                    next.style.opacity = dis ? '0.35' : '1';
+                    next.style.pointerEvents = dis ? 'none' : 'auto';
+                }
             }
         }
 
@@ -7389,10 +7342,8 @@
             }
         }
 
-        // Barra fixa inferior: Mantida permanentemente visível (sem ocultação no scroll)
         function setupScrollListeners() {
-            const bar = document.querySelector('.fixed-remote-bar');
-            if (bar) bar.classList.remove('hidden-down');
+            // A paginação agora é inline no fim de cada catálogo de conteúdo
         }
 
         // Botão Unificado Principal: Voltar para TV Ao Vivo E Atualizar Conexão da TV

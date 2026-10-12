@@ -3517,7 +3517,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 pass
 
         if not sw:
-            sw = """// Service Worker para PWA do Controle Remoto
+            sw = r"""// Service Worker para PWA do Controle Remoto
 const CACHE_NAME = 'controle-tv-v22';
 const STATIC_ASSETS = [
     '/',

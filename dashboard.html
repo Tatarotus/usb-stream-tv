@@ -79,6 +79,11 @@
             padding: 0;
         }
 
+        button {
+            font-family: inherit;
+            color: var(--text-primary);
+        }
+
         body {
             font-family: var(--font-family);
             background-color: var(--bg);
@@ -151,51 +156,7 @@
             gap: 6px;
         }
 
-        /* SELETOR PRINCIPAL DE MODO: SALVOS vs SÉRIES vs FILMES vs TV AO VIVO */
-        .main-mode-toggle {
-            display: flex;
-            gap: 8px;
-            width: 100%;
-            position: sticky;
-            top: 0;
-            z-index: 95;
-            background: var(--bg);
-            padding: 8px 0;
-        }
 
-        .btn-mode-tab {
-            flex: 1;
-            min-width: 0;
-            min-height: 52px;
-            background: var(--surface);
-            border: 3px solid var(--border);
-            border-radius: var(--btn-radius);
-            color: var(--text-muted);
-            font-family: var(--font-family);
-            font-size: clamp(12px, 3.2vw, 17px);
-            padding: 0 4px;
-            font-weight: 900;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 4px;
-            cursor: pointer;
-            transition: all 0.15s ease;
-            white-space: nowrap;
-        }
-        .btn-mode-tab:active {
-            transform: scale(0.96);
-        }
-        .btn-mode-tab.active {
-            background: #14532d;
-            border-color: var(--gold);
-            color: #ffffff;
-            box-shadow: 0 0 20px rgba(250, 204, 21, 0.3);
-        }
-        .btn-mode-tab:focus-visible {
-            outline: 4px solid var(--gold);
-            outline-offset: 2px;
-        }
 
         /* Cartão "No Ar Agora na TV" / "Filme em Reprodução" */
         .now-playing-card {
@@ -2276,15 +2237,7 @@
                 padding: 18px 24px;
             }
 
-            /* Seletor de Modo Desktop */
-            .main-mode-toggle {
-                max-width: 800px;
-                margin: 0 auto;
-                width: 100%;
-            }
-            .btn-mode-tab:hover {
-                background: #334155;
-            }
+
 
             /* Grade de Filmes e Séries Desktop */
             .catalog-movies-grid {
@@ -2340,11 +2293,11 @@
         /* ==================== ESTILOS STITCH SENIOR MOBILE REDESIGN ==================== */
 
         /* 3D Tactile Buttons & Surfaces */
-        .btn-mode-tab, .cat-quick-box, .btn-modal-action, .btn-paginator-action, .btn-paginator-top, .bottom-nav-item, .btn-voice-search, .pwa-install-btn {
+        .cat-quick-box, .btn-modal-action, .btn-paginator-action, .btn-paginator-top, .bottom-nav-item, .btn-voice-search, .pwa-install-btn {
             box-shadow: 0 4px 0 rgba(0, 0, 0, 0.45);
             transition: transform 0.1s ease, box-shadow 0.1s ease, background 0.15s ease;
         }
-        .btn-mode-tab:active, .cat-quick-box:active, .btn-modal-action:active, .btn-paginator-action:active, .btn-paginator-top:active, .bottom-nav-item:active, .btn-voice-search:active {
+        .cat-quick-box:active, .btn-modal-action:active, .btn-paginator-action:active, .btn-paginator-top:active, .bottom-nav-item:active, .btn-voice-search:active {
             transform: translateY(2px) !important;
             box-shadow: 0 2px 0 rgba(0, 0, 0, 0.45) !important;
         }
@@ -2385,29 +2338,7 @@
             gap: 6px !important;
         }
 
-        /* Abas Superiores de Modo */
-        .main-mode-toggle {
-            background: rgba(11, 19, 38, 0.95) !important;
-            backdrop-filter: blur(12px) !important;
-            -webkit-backdrop-filter: blur(12px) !important;
-            padding: 8px 0 !important;
-            gap: 8px !important;
-        }
-        .btn-mode-tab {
-            background: var(--surface-card) !important;
-            color: var(--text-muted) !important;
-            border: 2px solid var(--border) !important;
-            font-weight: 800 !important;
-            font-size: 16px !important;
-            border-radius: 14px !important;
-            height: 52px !important;
-        }
-        .btn-mode-tab.active {
-            background: var(--primary) !important;
-            color: var(--on-primary) !important;
-            border-color: var(--primary-fixed) !important;
-            font-weight: 900 !important;
-        }
+
 
         /* Cartão de Busca Sênior com Microfone / Comando de Voz */
         .senior-search-card {
@@ -2592,13 +2523,31 @@
             flex-shrink: 0;
         }
         .cat-quick-box.cat-all-box {
+            grid-column: 1 / -1 !important;
+            min-height: 58px;
             background: var(--secondary-container) !important;
             color: var(--on-secondary) !important;
-            border-color: var(--secondary) !important;
+            border: 2px solid var(--secondary) !important;
+            justify-content: center;
+            text-align: center;
+            gap: 12px;
         }
         .cat-quick-box.cat-all-box .material-symbols-outlined {
             color: var(--on-secondary) !important;
             font-size: 28px;
+            flex-shrink: 0;
+        }
+        .cat-quick-box.cat-all-box .cat-box-col {
+            align-items: center;
+        }
+        .cat-quick-box.cat-all-box .cat-box-main {
+            font-size: 17px;
+            font-weight: 900;
+        }
+        .cat-quick-box.cat-all-box .cat-box-sub {
+            font-size: 13px;
+            font-weight: 700;
+            color: rgba(26, 18, 2, 0.85);
         }
         .cat-box-col {
             display: flex;
@@ -2777,22 +2726,24 @@
         .drawer-alphabet-bar::-webkit-scrollbar { display: none; }
         .drawer-alpha-btn {
             min-height: 40px;
-            padding: 0 12px;
-            background: var(--surface-card);
-            border: 1px solid var(--border);
-            color: var(--text-primary);
+            padding: 0 14px;
+            background: #172338;
+            border: 1.5px solid #334155;
+            color: #ffffff !important;
             border-radius: 10px;
-            font-size: 15px;
+            font-size: 16px;
             font-weight: 800;
             font-family: var(--font-family);
             cursor: pointer;
             flex-shrink: 0;
             box-shadow: 0 2px 0 rgba(0,0,0,0.3);
+            transition: all 0.12s ease;
         }
         .drawer-alpha-btn.active {
-            background: var(--primary);
-            color: var(--on-primary);
-            border-color: var(--primary-fixed);
+            background: var(--primary) !important;
+            color: #052e16 !important;
+            border-color: var(--primary-fixed) !important;
+            box-shadow: 0 3px 0 rgba(0,0,0,0.45);
         }
         .drawer-categories-list {
             flex: 1;
@@ -2800,33 +2751,40 @@
             padding: 12px 18px 24px 18px;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 10px;
             -webkit-overflow-scrolling: touch;
         }
         .drawer-cat-item {
-            min-height: 56px;
-            padding: 12px 16px;
-            background: var(--surface-card);
-            border: 1.5px solid var(--border);
+            min-height: 58px;
+            padding: 12px 18px;
+            background: #172338;
+            color: #ffffff !important;
+            border: 2px solid #334155;
             border-radius: 14px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 12px;
+            gap: 14px;
             cursor: pointer;
-            box-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
-            transition: transform 0.1s ease, box-shadow 0.1s ease, background 0.15s ease;
+            box-shadow: 0 4px 0 rgba(0, 0, 0, 0.45);
+            transition: transform 0.1s ease, box-shadow 0.1s ease, background 0.15s ease, border-color 0.15s ease;
             text-align: left;
             user-select: none;
             -webkit-user-select: none;
+            font-family: var(--font-family) !important;
+        }
+        .drawer-cat-item:hover {
+            background: #1e304d;
+            border-color: #475569;
         }
         .drawer-cat-item:active {
             transform: translateY(2px);
-            box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+            box-shadow: 0 2px 0 rgba(0, 0, 0, 0.45);
+            background: #223759;
         }
         .drawer-cat-item.active {
             background: var(--primary) !important;
-            color: var(--on-primary) !important;
+            color: #052e16 !important;
             border-color: var(--primary-fixed) !important;
             box-shadow: 0 4px 0 rgba(0, 0, 0, 0.45) !important;
         }
@@ -2835,6 +2793,7 @@
             align-items: center;
             gap: 12px;
             min-width: 0;
+            color: inherit;
         }
         .drawer-cat-item-left .material-symbols-outlined {
             font-size: 26px;
@@ -2842,22 +2801,27 @@
             flex-shrink: 0;
         }
         .drawer-cat-item.active .drawer-cat-item-left .material-symbols-outlined {
-            color: var(--on-primary) !important;
+            color: #052e16 !important;
         }
         .drawer-cat-name {
             font-size: 18px;
             font-weight: 800;
+            color: #ffffff !important;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            letter-spacing: 0.2px;
+        }
+        .drawer-cat-item.active .drawer-cat-name {
+            color: #052e16 !important;
         }
         .drawer-cat-arrow {
-            font-size: 22px;
-            color: var(--text-muted);
+            font-size: 24px;
+            color: #cbd5e1;
             flex-shrink: 0;
         }
         .drawer-cat-item.active .drawer-cat-arrow {
-            color: var(--on-primary) !important;
+            color: #052e16 !important;
         }
 
         /* Grade de Filmes e Séries: 2 Colunas e Cards Táteis */
@@ -3160,17 +3124,17 @@
 
         /* Barra de Navegação Inferior Fixa (Bottom Mode Nav) */
         .bottom-mode-nav {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            z-index: 1000;
-            background: rgba(23, 31, 51, 0.95);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border-top: 1px solid var(--border-prominent);
-            box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
-            padding-bottom: max(6px, env(safe-area-inset-bottom, 0px));
+            position: fixed !important;
+            bottom: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            z-index: 2000 !important;
+            background: rgba(11, 19, 38, 0.97) !important;
+            backdrop-filter: blur(16px) !important;
+            -webkit-backdrop-filter: blur(16px) !important;
+            border-top: 2px solid var(--border-prominent) !important;
+            box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.7) !important;
+            padding-bottom: max(8px, env(safe-area-inset-bottom, 0px)) !important;
         }
         .bottom-nav-grid {
             display: grid;
@@ -3248,21 +3212,7 @@
             </button>
         </header>
 
-        <!-- SELETOR PRINCIPAL DE MODO: SALVOS vs SÉRIES vs FILMES vs TV AO VIVO -->
-        <div class="main-mode-toggle" role="tablist">
-            <button id="tab-saved" class="btn-mode-tab" role="tab" aria-selected="false" onclick="switchAppMode('saved')">
-                <span id="tab-saved-text">💾 SALVOS</span>
-            </button>
-            <button id="tab-series" class="btn-mode-tab" role="tab" aria-selected="false" onclick="switchAppMode('series')">
-                🍿 SÉRIES
-            </button>
-            <button id="tab-cinema" class="btn-mode-tab" role="tab" aria-selected="false" onclick="switchAppMode('cinema')">
-                🎬 FILMES
-            </button>
-            <button id="tab-live" class="btn-mode-tab" role="tab" aria-selected="false" onclick="switchAppMode('live')">
-                📺 AO VIVO
-            </button>
-        </div>
+
 
         <!-- Banner de Confirmação de Ação (Aviso Longo) -->
         <div id="action-banner" class="action-banner" role="status" aria-live="polite"></div>
@@ -4725,14 +4675,7 @@
             updatePaginationUI();
 
             if (doScroll) {
-                requestAnimationFrame(() => {
-                    const toggle = document.querySelector('.main-mode-toggle');
-                    if (toggle) {
-                        const rect = toggle.getBoundingClientRect();
-                        const targetY = window.pageYOffset + rect.top;
-                        window.scrollTo({ top: Math.max(0, targetY), behavior: 'smooth' });
-                    }
-                });
+                window.scrollTo({ top: 0, behavior: 'smooth' });
             }
         }
 
@@ -5157,6 +5100,11 @@
             if (btnMovies) btnMovies.innerText = `🎬 Filmes (${moviesCount})`;
             if (btnYt) btnYt.innerText = `🌐 Web / Torrent (${ytCount + torrentCount})`;
             if (tabSavedText) tabSavedText.innerText = allCount > 0 ? `💾 SALVOS (${allCount})` : '💾 SALVOS';
+            const navSaved = document.getElementById('nav-saved');
+            if (navSaved) {
+                const lbl = navSaved.querySelector('.bottom-nav-label');
+                if (lbl) lbl.innerText = allCount > 0 ? `Salvos (${allCount})` : 'Salvos';
+            }
 
             // 1. Renderiza Fila de Downloads Ativos e Falhas
             const activeSections = [
@@ -5974,7 +5922,7 @@
                 isActive: (movieCategory === 'all')
             });
 
-            const topSlice = sortedCats.slice(0, 4);
+            const topSlice = sortedCats.slice(0, 3);
             const inTopSlice = topSlice.some(c => String(c.id) === String(movieCategory));
 
             if (isSpecific && !inTopSlice && selectedCatObj) {
@@ -5984,7 +5932,7 @@
                     icon: 'check_circle',
                     isActive: true
                 });
-                topSlice.slice(0, 3).forEach(c => {
+                topSlice.slice(0, 2).forEach(c => {
                     quickBoxes.push({
                         id: String(c.id),
                         name: c.name,
@@ -6295,7 +6243,7 @@
             const isSpecific = (seriesCategory && seriesCategory !== 'all' && seriesCategory !== 'favorites');
             let selectedCatObj = isSpecific ? sortedCats.find(c => String(c.id) === String(seriesCategory)) : null;
 
-            const topSlice = sortedCats.slice(0, 3);
+            const topSlice = sortedCats.slice(0, 2);
             const inTopSlice = topSlice.some(c => String(c.id) === String(seriesCategory));
 
             if (isSpecific && !inTopSlice && selectedCatObj) {
@@ -6305,7 +6253,7 @@
                     icon: 'check_circle',
                     isActive: true
                 });
-                topSlice.slice(0, 2).forEach(c => {
+                topSlice.slice(0, 1).forEach(c => {
                     quickBoxes.push({
                         id: String(c.id),
                         name: c.name,
@@ -6887,7 +6835,7 @@
             const isSpecific = (liveCategory && liveCategory !== 'all' && liveCategory !== 'favorites' && liveCategory !== 'eco');
             let selectedCatObj = isSpecific ? (liveCategoriesList || []).find(c => String(c.id) === String(liveCategory)) : null;
 
-            const topSlice = (liveCategoriesList || []).slice(0, 2);
+            const topSlice = (liveCategoriesList || []).slice(0, 1);
             const inTopSlice = topSlice.some(c => String(c.id) === String(liveCategory));
 
             if (isSpecific && !inTopSlice && selectedCatObj) {
@@ -6896,14 +6844,6 @@
                     name: selectedCatObj.name,
                     icon: 'check_circle',
                     isActive: true
-                });
-                topSlice.slice(0, 1).forEach(c => {
-                    quickBoxes.push({
-                        id: String(c.id),
-                        name: c.name,
-                        icon: getCategoryIcon(c.name),
-                        isActive: false
-                    });
                 });
             } else {
                 topSlice.forEach(c => {

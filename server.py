@@ -3841,6 +3841,10 @@ self.addEventListener('message', (event) => {
             self.send_error(404)
             return
 
+        if "postimg.cc" in url or "postimg.org" in url:
+            self.send_error(404)
+            return
+
         with LOGO_CACHE_LOCK:
             if url in LOGO_CACHE:
                 cached_data, ctype = LOGO_CACHE[url]
@@ -3879,7 +3883,7 @@ self.addEventListener('message', (event) => {
 
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=3) as resp:
                 data = resp.read()
                 ctype = resp.headers.get("Content-Type", "image/jpeg")
                 with LOGO_CACHE_LOCK:

@@ -763,11 +763,11 @@
 
         .btn-vod-grid-play {
             width: 100%;
-            min-height: 44px;
-            background: #15803d;
-            border: 2px solid #22c55e;
-            border-radius: 10px;
-            color: #ffffff;
+            min-height: 48px;
+            background: var(--primary);
+            border: none;
+            border-radius: 12px;
+            color: var(--on-primary);
             font-size: 15px;
             font-weight: 900;
             display: flex;
@@ -775,24 +775,25 @@
             justify-content: center;
             gap: 6px;
             cursor: pointer;
+            box-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
             transition: all 0.1s ease;
         }
         .btn-vod-grid-play:active {
             transform: scale(0.96);
-            background: #22c55e;
-            color: #000000;
+            background: var(--primary-fixed);
         }
 
         .btn-vod-grid-delete {
-            background: transparent;
-            border: none;
-            color: var(--red);
+            background: var(--surface-card);
+            border: 1px solid var(--border);
+            color: var(--danger-red);
             font-size: 13px;
-            font-weight: 700;
-            padding: 4px;
+            font-weight: 800;
+            padding: 8px;
             cursor: pointer;
             text-align: center;
-            border-radius: 6px;
+            border-radius: 10px;
+            transition: background 0.15s ease;
         }
         .btn-vod-grid-delete:active {
             background: rgba(239, 68, 68, 0.2);
@@ -1015,23 +1016,31 @@
         }
 
         .channel-logo-wrap {
-            width: 52px;
-            height: 52px;
+            width: 58px;
+            height: 50px;
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
             border-radius: 10px;
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.04);
             overflow: hidden;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
         }
         .channel-logo-img {
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
         }
+        .channel-badge-svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+            border-radius: 8px;
+        }
         .channel-logo-fallback {
-            font-size: 32px;
+            font-size: 28px;
+            line-height: 1;
         }
 
         .channel-info {
@@ -1312,13 +1321,156 @@
             font-weight: 600;
         }
 
-        /* Área de Salvos na TV & Chips */
+        /* Área de Salvos na TV & Chips (Stitch Mobile Redesign) */
         .saved-header-card {
-            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-            border: 3px solid var(--border);
-            border-radius: var(--btn-radius);
-            padding: 16px 18px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            background: var(--surface-container);
+            border: 1px solid var(--border-prominent);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .saved-card-top {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+        }
+        .saved-icon-circle {
+            width: 52px;
+            height: 52px;
+            border-radius: 14px;
+            background: #172a45;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .saved-icon-circle .material-symbols-outlined {
+            font-size: 28px;
+            color: #38bdf8;
+        }
+        .saved-card-info {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            gap: 4px;
+        }
+        .saved-card-title {
+            font-size: 22px;
+            font-weight: 800;
+            color: var(--text-primary);
+            line-height: 1.25;
+        }
+        .saved-card-desc {
+            font-size: 15px;
+            font-weight: 500;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+        .saved-disk-box {
+            background: #111c30;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .saved-disk-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 15px;
+            font-weight: 700;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .saved-disk-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-primary);
+        }
+        .saved-disk-label .material-symbols-outlined {
+            font-size: 20px;
+            color: #4edea3;
+        }
+        .saved-disk-val {
+            color: #4edea3;
+            font-weight: 800;
+            font-size: 16px;
+        }
+        .saved-disk-track {
+            width: 100%;
+            height: 8px;
+            background: #1e293b;
+            border-radius: 9999px;
+            overflow: hidden;
+        }
+        .saved-disk-fill {
+            height: 100%;
+            background: #4edea3;
+            border-radius: 9999px;
+            transition: width 0.3s ease;
+        }
+        .saved-disk-count {
+            font-size: 14px;
+            font-weight: 500;
+            color: #94a3b8;
+        }
+        .saved-actions-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            width: 100%;
+        }
+        .btn-saved-open {
+            min-height: 54px;
+            width: 100%;
+            background: #0ea5e9;
+            color: #002244;
+            border: none;
+            border-radius: 16px;
+            font-size: 17px;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            cursor: pointer;
+            box-shadow: 0 4px 14px rgba(14, 165, 233, 0.3);
+            transition: transform 0.1s ease, filter 0.15s ease;
+        }
+        .btn-saved-open:active {
+            transform: scale(0.98);
+            filter: brightness(0.95);
+        }
+        .btn-saved-add {
+            min-height: 52px;
+            width: 100%;
+            background: #202d3f;
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            font-size: 16px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+            transition: transform 0.1s ease, background-color 0.15s ease;
+        }
+        .btn-saved-add:active {
+            transform: scale(0.98);
+            background: #28374d;
+        }
+        .btn-saved-add .material-symbols-outlined {
+            color: #f59e0b;
+            font-size: 24px;
         }
         .btn-toggle-yt {
             background: rgba(239, 68, 68, 0.15);
@@ -2485,28 +2637,33 @@
         }
         .category-quick-grid {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px;
             width: 100%;
+            box-sizing: border-box;
         }
         .cat-quick-box {
             min-height: 60px;
-            padding: 10px 14px;
+            padding: 10px 12px;
             background: var(--surface-card);
             color: var(--text-primary);
             border: 2px solid var(--border);
             border-radius: 14px;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             font-family: var(--font-family);
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 700;
             cursor: pointer;
             text-align: left;
             box-shadow: 0 4px 0 rgba(0, 0, 0, 0.45);
             user-select: none;
             -webkit-user-select: none;
+            min-width: 0;
+            width: 100%;
+            box-sizing: border-box;
+            overflow: hidden;
         }
         .cat-quick-box.active {
             background: var(--primary) !important;
@@ -2518,7 +2675,7 @@
             color: var(--on-primary) !important;
         }
         .cat-quick-box .material-symbols-outlined {
-            font-size: 26px;
+            font-size: 24px;
             color: var(--secondary);
             flex-shrink: 0;
         }
@@ -2553,19 +2710,28 @@
             display: flex;
             flex-direction: column;
             min-width: 0;
+            flex: 1;
             line-height: 1.2;
+            overflow: hidden;
         }
         .cat-box-main {
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 800;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            width: 100%;
+            display: block;
         }
         .cat-box-sub {
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 600;
             opacity: 0.92;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            width: 100%;
+            display: block;
         }
 
         /* Gaveta / Drawer Inferior de Todas as Categorias */
@@ -3106,6 +3272,26 @@
             font-size: 15px;
             color: var(--text-muted);
         }
+        .btn-voice-confirm {
+            min-height: 50px;
+            padding: 0 20px;
+            background: #4edea3;
+            border: none;
+            color: #062b1a;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 800;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            box-shadow: 0 4px 12px rgba(78, 222, 163, 0.35);
+            transition: transform 0.1s ease;
+        }
+        .btn-voice-confirm:active {
+            transform: scale(0.97);
+        }
         .btn-voice-cancel {
             min-height: 50px;
             padding: 0 24px;
@@ -3217,27 +3403,49 @@
         <!-- Banner de Confirmação de Ação (Aviso Longo) -->
         <div id="action-banner" class="action-banner" role="status" aria-live="polite"></div>
 
-        <!-- ==================== ÁREA DA MEMÓRIA DA TV (SALVOS & BAIXADOS) ==================== -->
+        <!-- ==================== ÁREA DA MEMÓRIA DA TV (SALVOS & BAIXADOS - STITCH DESIGN) ==================== -->
         <div id="section-saved" style="display: none; flex-direction: column; gap: 16px;">
-            <!-- Cartão Informativo de Armazenamento -->
+            <!-- Cartão Informativo de Armazenamento Stitch -->
             <div class="saved-header-card">
-                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <span style="font-size: 26px;">💾</span>
-                        <div>
-                            <div style="font-size: 19px; font-weight: 900; color: #fff;">Prontos na Memória da TV</div>
-                            <div id="saved-disk-info" style="font-size: 14px; font-weight: 700; color: var(--text-muted);">
-                                Tocam direto do pendrive sem internet e sem travar
-                            </div>
-                        </div>
+                <div class="saved-card-top">
+                    <div class="saved-icon-circle">
+                        <span class="material-symbols-outlined">save</span>
                     </div>
-                    <button id="btn-toggle-yt" class="btn-toggle-yt" onclick="toggleYtDrawer()">
-                        ▶️ + YouTube
+                    <div class="saved-card-info">
+                        <h2 class="saved-card-title">Salvos na TV e Pendrive</h2>
+                        <p class="saved-card-desc">Assista direto do pendrive da TV sem usar internet e sem engasgos.</p>
+                    </div>
+                </div>
+
+                <!-- Status do Disco da TV -->
+                <div class="saved-disk-box">
+                    <div class="saved-disk-header">
+                        <span class="saved-disk-label">
+                            <span class="material-symbols-outlined">hard_drive</span>
+                            Espaço Livre no Pendrive da TV:
+                        </span>
+                        <span id="saved-disk-info" class="saved-disk-val">28 GB Livres (80%)</span>
+                    </div>
+                    <div class="saved-disk-track">
+                        <div id="saved-disk-progress" class="saved-disk-fill" style="width: 20%;"></div>
+                    </div>
+                    <span id="saved-disk-subtext" class="saved-disk-count">0 Filmes e Capítulos salvos prontos para tocar.</span>
+                </div>
+
+                <!-- Botões de Ação do Topo -->
+                <div class="saved-actions-grid">
+                    <button class="btn-saved-open" type="button" onclick="scrollToSavedShelf()">
+                        <span class="material-symbols-outlined">folder_open</span>
+                        <span id="btn-saved-open-text">Abrir Filmes Salvos</span>
+                    </button>
+                    <button class="btn-saved-add" type="button" onclick="toggleYtDrawer()">
+                        <span class="material-symbols-outlined" style="color: var(--secondary);">link</span>
+                        <span>Adicionar Vídeo ou Link</span>
                     </button>
                 </div>
 
-                <!-- Gaveta do YouTube e Torrent (Oculta por padrão para não confundir o idoso) -->
-                <div id="saved-yt-drawer" style="display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.12);">
+                <!-- Gaveta do YouTube e Torrent (Aparece ao tocar em Adicionar Vídeo ou Link) -->
+                <div id="saved-yt-drawer" style="display: none; margin-top: 6px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.12);">
                     <div style="font-size: 15px; font-weight: 800; color: var(--gold); margin-bottom: 8px;">
                         Assistir YouTube ou Baixar Torrent (Magnet) na TV:
                     </div>
@@ -3802,10 +4010,16 @@
                 "Diga o canal, filme ou série..."
             </div>
             <p class="voice-tip-text">Você também pode dizer "Filmes", "Séries" ou "Ao Vivo".</p>
-            <button class="btn-voice-cancel" onclick="stopVoiceSearch()">
-                <span class="material-symbols-outlined">close</span>
-                <span>Cancelar</span>
-            </button>
+            <div style="display: flex; gap: 10px; width: 100%; justify-content: center; flex-wrap: wrap;">
+                <button id="btn-voice-confirm" class="btn-voice-confirm" type="button" onclick="confirmVoiceSearch()" style="display: none;">
+                    <span class="material-symbols-outlined">search</span>
+                    <span>Buscar Agora</span>
+                </button>
+                <button class="btn-voice-cancel" type="button" onclick="stopVoiceSearch()">
+                    <span class="material-symbols-outlined">close</span>
+                    <span>Cancelar</span>
+                </button>
+            </div>
         </div>
     </div>
 
@@ -3815,16 +4029,44 @@
         let speechRecognitionInstance = null;
         let activeVoiceInputId = null;
         let activeVoiceContext = null;
+        let currentVoiceTranscript = '';
+        let voiceHandled = false;
 
-        function startVoiceSearch(targetInputId, context = 'general') {
+        async function startVoiceSearch(targetInputId, context = 'general') {
             triggerHaptic();
             activeVoiceInputId = targetInputId;
             activeVoiceContext = context;
+            currentVoiceTranscript = '';
+            voiceHandled = false;
 
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (!SpeechRecognition) {
                 showActionBanner('🎤 Seu navegador não suporta reconhecimento de voz direto. Digite no campo de busca.', 5000);
                 return;
+            }
+
+            const vModal = document.getElementById('voice-modal');
+            const vText = document.getElementById('voice-transcript-text');
+            const confirmBtn = document.getElementById('btn-voice-confirm');
+            if (vText) vText.innerText = 'Diga o canal, filme ou série...';
+            if (confirmBtn) confirmBtn.style.display = 'none';
+            if (vModal) vModal.style.display = 'flex';
+
+            document.querySelectorAll('.btn-voice-search').forEach(b => b.classList.add('listening'));
+
+            // Solicitação proativa de permissão de microfone em navegadores mobile
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                try {
+                    const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    audioStream.getTracks().forEach(t => t.stop());
+                } catch (micErr) {
+                    console.warn('Permissão de microfone não concedida via getUserMedia:', micErr);
+                    if (micErr.name === 'NotAllowedError' || micErr.name === 'PermissionDeniedError') {
+                        showActionBanner('🎤 Acesso ao microfone negado! Permita o microfone no topo do navegador.', 6000);
+                        stopVoiceSearch();
+                        return;
+                    }
+                }
             }
 
             try {
@@ -3838,20 +4080,30 @@
                 speechRecognitionInstance.interimResults = true;
                 speechRecognitionInstance.maxAlternatives = 1;
 
-                const vModal = document.getElementById('voice-modal');
-                const vText = document.getElementById('voice-transcript-text');
-                if (vText) vText.innerText = 'Diga o que você quer assistir...';
-                if (vModal) vModal.style.display = 'flex';
-
-                document.querySelectorAll('.btn-voice-search').forEach(b => b.classList.add('listening'));
-
                 speechRecognitionInstance.onresult = (event) => {
-                    const result = event.results[event.results.length - 1];
-                    const transcript = result[0].transcript.trim();
-                    if (vText) vText.innerText = `"${transcript}"`;
+                    let fullTranscript = '';
+                    let isFinal = false;
 
-                    if (result.isFinal) {
-                        handleVoiceTranscript(transcript);
+                    for (let i = 0; i < event.results.length; ++i) {
+                        const item = event.results[i];
+                        if (item[0] && item[0].transcript) {
+                            fullTranscript += ' ' + item[0].transcript;
+                        }
+                        if (item.isFinal) isFinal = true;
+                    }
+
+                    fullTranscript = fullTranscript.trim();
+                    if (fullTranscript) {
+                        currentVoiceTranscript = fullTranscript;
+                        if (vText) vText.innerText = `"${fullTranscript}"`;
+                        if (confirmBtn) confirmBtn.style.display = 'inline-flex';
+                    }
+
+                    if (isFinal && fullTranscript && !voiceHandled) {
+                        voiceHandled = true;
+                        setTimeout(() => {
+                            handleVoiceTranscript(fullTranscript);
+                        }, 400);
                     }
                 };
 
@@ -3859,19 +4111,43 @@
                     console.warn('Erro de reconhecimento de voz:', event.error);
                     if (event.error === 'not-allowed') {
                         showActionBanner('🎤 Acesso ao microfone negado. Permita o microfone nas configurações do navegador.', 6000);
-                    } else if (event.error !== 'no-speech') {
+                        stopVoiceSearch();
+                    } else if (event.error === 'no-speech') {
+                        if (currentVoiceTranscript && !voiceHandled) {
+                            voiceHandled = true;
+                            handleVoiceTranscript(currentVoiceTranscript);
+                        } else {
+                            showActionBanner('🎤 Nenhuma fala detectada. Fale mais perto do microfone.', 4000);
+                            stopVoiceSearch();
+                        }
+                    } else {
                         showActionBanner(`🎤 Aviso de voz: ${event.error}`, 4000);
+                        stopVoiceSearch();
                     }
-                    stopVoiceSearch();
                 };
 
                 speechRecognitionInstance.onend = () => {
-                    stopVoiceSearch();
+                    if (currentVoiceTranscript && !voiceHandled) {
+                        voiceHandled = true;
+                        handleVoiceTranscript(currentVoiceTranscript);
+                    } else {
+                        stopVoiceSearch();
+                    }
                 };
 
                 speechRecognitionInstance.start();
             } catch (err) {
                 console.error('Falha ao iniciar reconhecimento de voz:', err);
+                showActionBanner('🎤 Erro ao iniciar reconhecimento de voz. Tente novamente.', 4000);
+                stopVoiceSearch();
+            }
+        }
+
+        function confirmVoiceSearch() {
+            if (currentVoiceTranscript && !voiceHandled) {
+                voiceHandled = true;
+                handleVoiceTranscript(currentVoiceTranscript);
+            } else {
                 stopVoiceSearch();
             }
         }
@@ -3921,13 +4197,14 @@
                 return;
             }
 
-            let cleanQuery = rawText.replace(/^(assistir|colocar|por|ver|procurar|buscar|pesquisar|canal|filme|série|serie)\s+/i, '').trim();
+            let cleanQuery = rawText.replace(/^(assistir|colocar|por|põe|ver|procurar|buscar|pesquisar|canal|filme|série|serie|tocar)\s+/i, '').trim();
             if (!cleanQuery) cleanQuery = rawText;
 
             if (activeVoiceInputId) {
                 const inputEl = document.getElementById(activeVoiceInputId);
                 if (inputEl) {
                     inputEl.value = cleanQuery;
+                    inputEl.dispatchEvent(new Event('input', { bubbles: true }));
                 }
             }
 
@@ -3935,12 +4212,18 @@
                 onDrawerCatSearch(cleanQuery);
                 showActionBanner(`🔍 Filtrando categorias por: "${cleanQuery}"`, 3500);
             } else if (activeVoiceContext === 'movie' || currentAppMode === 'cinema') {
+                const mInp = document.getElementById('movie-search-input');
+                if (mInp) { mInp.value = cleanQuery; mInp.dispatchEvent(new Event('input', { bubbles: true })); }
                 onMovieSearch(cleanQuery);
                 showActionBanner(`🔍 Buscando filmes por: "${cleanQuery}"`, 3500);
             } else if (activeVoiceContext === 'series' || currentAppMode === 'series') {
+                const sInp = document.getElementById('series-search-input');
+                if (sInp) { sInp.value = cleanQuery; sInp.dispatchEvent(new Event('input', { bubbles: true })); }
                 onSeriesSearch(cleanQuery);
                 showActionBanner(`🔍 Buscando séries por: "${cleanQuery}"`, 3500);
             } else if (activeVoiceContext === 'live' || currentAppMode === 'live') {
+                const cInp = document.getElementById('channel-search-input');
+                if (cInp) { cInp.value = cleanQuery; cInp.dispatchEvent(new Event('input', { bubbles: true })); }
                 onChannelSearch(cleanQuery);
                 showActionBanner(`🔍 Buscando canais por: "${cleanQuery}"`, 3500);
             }
@@ -5025,13 +5308,19 @@
                 }
                 renderTvBanner();
 
-                // 2. Atualiza Espaço Livre na TV
+                // 2. Atualiza Espaço Livre na TV (Stitch Redesign)
                 const diskBadge = document.getElementById('vod-disk-badge');
                 const savedDisk = document.getElementById('saved-disk-info');
+                const savedDiskProgress = document.getElementById('saved-disk-progress');
                 if (data.disk && data.disk.total_gb > 0) {
-                    const diskText = `💾 Espaço TV: <strong>${data.disk.free_gb} GB livres</strong> de ${data.disk.total_gb} GB`;
+                    const freeGb = data.disk.free_gb || 0;
+                    const totalGb = data.disk.total_gb || 1;
+                    const pctFree = Math.round((freeGb / totalGb) * 100);
+                    const pctUsed = Math.max(0, Math.min(100, 100 - pctFree));
+                    const diskText = `💾 Espaço TV: <strong>${freeGb} GB livres</strong> de ${totalGb} GB`;
                     if (diskBadge) diskBadge.innerHTML = diskText;
-                    if (savedDisk) savedDisk.innerHTML = `${diskText} • Tocam direto sem internet`;
+                    if (savedDisk) savedDisk.innerText = `${freeGb} GB Livres (${pctFree}%)`;
+                    if (savedDiskProgress) savedDiskProgress.style.width = `${pctUsed}%`;
                 }
 
                 const inProgressTasks = vodTasks.filter(t => ['processing', 'queued', 'pending', 'downloading', 'converting'].includes(t.status));
@@ -5068,6 +5357,11 @@
             } catch (err) {}
         }
 
+        function scrollToSavedShelf() {
+            const shelf = document.getElementById('saved-shelf-list');
+            if (shelf) shelf.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
         // Renderiza a Prateleira de Conteúdos Salvos (Séries, Filmes e YouTube) e Downloads Ativos
         function renderSavedShelf() {
             // Ordena tarefas para que os VODs mais recentes fiquem no topo da pilha
@@ -5094,6 +5388,15 @@
             const btnMovies = document.getElementById('filter-saved-movies');
             const btnYt = document.getElementById('filter-saved-yt');
             const tabSavedText = document.getElementById('tab-saved-text');
+            const savedSubtext = document.getElementById('saved-disk-subtext');
+            const btnSavedOpenText = document.getElementById('btn-saved-open-text');
+
+            if (savedSubtext) {
+                savedSubtext.innerText = `${allCount} Filmes e Capítulos salvos prontos para tocar.`;
+            }
+            if (btnSavedOpenText) {
+                btnSavedOpenText.innerText = allCount > 0 ? `Abrir Meus ${allCount} Salvos` : 'Abrir Meus Filmes Salvos';
+            }
 
             if (btnAll) btnAll.innerText = `⭐ Todos (${allCount})`;
             if (btnSeries) btnSeries.innerText = `🍿 Séries (${seriesCount})`;
@@ -6948,6 +7251,368 @@
             }
         }
 
+        // Gerador de Logos Vetoriais (SVG) Oficiais de Alta Fidelidade para Canais Brasileiros
+        function getChannelBrandBadge(rawName) {
+            const name = (rawName || '').toUpperCase();
+
+            // 1. SporTV (4K, 2, 3, HD)
+            if (name.includes('SPORTV')) {
+                let badge = 'HD';
+                if (name.includes('4K')) badge = '4K';
+                else if (name.includes(' 2 ') || name.includes(' 2') || name.includes('2 ')) badge = '2';
+                else if (name.includes(' 3 ') || name.includes(' 3') || name.includes('3 ')) badge = '3';
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="g-sp-${Math.abs(name.length)}" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#021B38"/>
+                            <stop offset="100%" stop-color="#084282"/>
+                        </linearGradient>
+                    </defs>
+                    <rect width="120" height="100" rx="14" fill="url(#g-sp-${Math.abs(name.length)})"/>
+                    <rect x="0" y="86" width="120" height="14" fill="#00A8FF"/>
+                    <text x="60" y="46" font-family="system-ui, sans-serif" font-weight="900" font-style="italic" font-size="27" fill="#FFFFFF" text-anchor="middle" letter-spacing="-0.5">SporTV</text>
+                    <rect x="36" y="55" width="48" height="22" rx="6" fill="#00A8FF"/>
+                    <text x="60" y="71" font-family="system-ui, sans-serif" font-weight="900" font-size="14" fill="#021B38" text-anchor="middle">${badge}</text>
+                </svg>`;
+            }
+
+            // 2. Premiere
+            if (name.includes('PREMIERE')) {
+                let m = name.match(/PREMIERE\s*(\d+|CLUBES)/i);
+                let sub = m ? m[1] : (name.includes('CLUBES') ? 'CLUBES' : 'FUTEBOL');
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#063E1C"/>
+                    <circle cx="60" cy="27" r="13" fill="#EAB308" opacity="0.25"/>
+                    <path d="M60 18 L63 25 L70 26 L65 31 L67 38 L60 34 L53 38 L55 31 L50 26 L57 25 Z" fill="#FACC15"/>
+                    <text x="60" y="58" font-family="system-ui, sans-serif" font-weight="900" font-size="16" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">PREMIERE</text>
+                    <text x="60" y="79" font-family="system-ui, sans-serif" font-weight="800" font-size="14" fill="#FACC15" text-anchor="middle">${sub}</text>
+                </svg>`;
+            }
+
+            // 3. ESPN
+            if (name.includes('ESPN')) {
+                let sub = 'HD';
+                if (name.includes('4')) sub = '4';
+                else if (name.includes('3')) sub = '3';
+                else if (name.includes('2')) sub = '2';
+                else if (name.includes('EXTRA')) sub = 'EXTRA';
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#C8102E"/>
+                    <line x1="10" y1="46" x2="110" y2="46" stroke="#FFFFFF" stroke-width="2"/>
+                    <text x="60" y="43" font-family="system-ui, sans-serif" font-weight="900" font-style="italic" font-size="32" fill="#FFFFFF" text-anchor="middle" letter-spacing="-1">ESPN</text>
+                    <rect x="36" y="56" width="48" height="22" rx="6" fill="#FFFFFF"/>
+                    <text x="60" y="72" font-family="system-ui, sans-serif" font-weight="900" font-size="14" fill="#C8102E" text-anchor="middle">${sub}</text>
+                </svg>`;
+            }
+
+            // 4. Combate
+            if (name.includes('COMBATE')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#4C0519"/>
+                    <rect x="0" y="86" width="120" height="14" fill="#E11D48"/>
+                    <text x="60" y="45" font-family="system-ui, sans-serif" font-weight="900" font-size="18" fill="#FFFFFF" text-anchor="middle" letter-spacing="1.5">COMBATE</text>
+                    <rect x="34" y="55" width="52" height="20" rx="4" fill="#E11D48"/>
+                    <text x="60" y="70" font-family="system-ui, sans-serif" font-weight="900" font-size="12" fill="#FFFFFF" text-anchor="middle">UFC / MMA</text>
+                </svg>`;
+            }
+
+            // 5. GloboNews
+            if (name.includes('GLOBONEWS') || (name.includes('GLOBO') && name.includes('NEWS'))) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#881337"/>
+                    <text x="60" y="44" font-family="system-ui, sans-serif" font-weight="900" font-size="19" fill="#FFFFFF" text-anchor="middle">GLOBO</text>
+                    <rect x="25" y="54" width="70" height="22" rx="4" fill="#FFFFFF"/>
+                    <text x="60" y="70" font-family="system-ui, sans-serif" font-weight="900" font-size="14" fill="#881337" text-anchor="middle">NEWS</text>
+                </svg>`;
+            }
+
+            // 6. Globo
+            if (name.includes('GLOBO')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <radialGradient id="g-gl-sph" cx="50%" cy="50%" r="50%">
+                            <stop offset="0%" stop-color="#FFFFFF"/>
+                            <stop offset="45%" stop-color="#38BDF8"/>
+                            <stop offset="100%" stop-color="#0284C7"/>
+                        </radialGradient>
+                    </defs>
+                    <rect width="120" height="100" rx="14" fill="#0A1E3F"/>
+                    <circle cx="60" cy="38" r="22" fill="url(#g-gl-sph)"/>
+                    <circle cx="60" cy="38" r="9" fill="#0A1E3F"/>
+                    <circle cx="60" cy="38" r="5" fill="#38BDF8"/>
+                    <text x="60" y="82" font-family="system-ui, sans-serif" font-weight="900" font-size="20" fill="#FFFFFF" text-anchor="middle" letter-spacing="2">GLOBO</text>
+                </svg>`;
+            }
+
+            // 7. SBT
+            if (name.includes('SBT')) {
+                let isNews = name.includes('NEWS');
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="g-sbt-arc" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#06B6D4"/>
+                            <stop offset="35%" stop-color="#3B82F6"/>
+                            <stop offset="70%" stop-color="#EC4899"/>
+                            <stop offset="100%" stop-color="#F59E0B"/>
+                        </linearGradient>
+                    </defs>
+                    <rect width="120" height="100" rx="14" fill="#0A192F"/>
+                    <circle cx="60" cy="36" r="24" fill="url(#g-sbt-arc)"/>
+                    <circle cx="60" cy="36" r="15" fill="#0A192F"/>
+                    <text x="60" y="42" font-family="system-ui, sans-serif" font-weight="900" font-size="16" fill="#FFFFFF" text-anchor="middle">sbt</text>
+                    <text x="60" y="78" font-family="system-ui, sans-serif" font-weight="900" font-size="17" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">SBT</text>
+                    ${isNews ? '<text x="60" y="92" font-family="system-ui, sans-serif" font-weight="800" font-size="11" fill="#38BDF8" text-anchor="middle">NEWS</text>' : ''}
+                </svg>`;
+            }
+
+            // 8. Record / Record News
+            if (name.includes('RECORD')) {
+                let isNews = name.includes('NEWS');
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#0A1128"/>
+                    <circle cx="60" cy="36" r="21" fill="#1E3A8A"/>
+                    <ellipse cx="60" cy="36" rx="21" ry="7" fill="none" stroke="#60A5FA" stroke-width="2.5"/>
+                    <text x="60" y="74" font-family="system-ui, sans-serif" font-weight="900" font-size="16" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">RECORD</text>
+                    ${isNews ? '<text x="60" y="90" font-family="system-ui, sans-serif" font-weight="800" font-size="12" fill="#60A5FA" text-anchor="middle">NEWS</text>' : ''}
+                </svg>`;
+            }
+
+            // 9. Band / BandNews / BandSports
+            if (name.includes('BAND')) {
+                let isSports = name.includes('SPORTS');
+                let isNews = name.includes('NEWS');
+                let bg = isNews ? '#881337' : (isSports ? '#047857' : '#064E3B');
+                let sub = isSports ? 'SPORTS' : (isNews ? 'NEWS' : 'TV');
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="${bg}"/>
+                    <circle cx="60" cy="34" r="18" fill="#FACC15"/>
+                    <circle cx="60" cy="34" r="9" fill="${bg}"/>
+                    <text x="60" y="70" font-family="system-ui, sans-serif" font-weight="900" font-size="19" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">BAND</text>
+                    <text x="60" y="88" font-family="system-ui, sans-serif" font-weight="800" font-size="13" fill="#FACC15" text-anchor="middle">${sub}</text>
+                </svg>`;
+            }
+
+            // 10. Telecine
+            if (name.includes('TELECINE')) {
+                let sub = 'CINEMA';
+                if (name.includes('PIPOCA')) sub = 'PIPOCA';
+                else if (name.includes('ACTION')) sub = 'ACTION';
+                else if (name.includes('PREMIUM')) sub = 'PREMIUM';
+                else if (name.includes('TOUCH')) sub = 'TOUCH';
+                else if (name.includes('CULT')) sub = 'CULT';
+                else if (name.includes('FUN')) sub = 'FUN';
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#E11D48"/>
+                    <text x="60" y="42" font-family="system-ui, sans-serif" font-weight="900" font-size="18" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">TELECINE</text>
+                    <rect x="20" y="55" width="80" height="24" rx="6" fill="#FFFFFF"/>
+                    <text x="60" y="72" font-family="system-ui, sans-serif" font-weight="900" font-size="14" fill="#E11D48" text-anchor="middle">${sub}</text>
+                </svg>`;
+            }
+
+            // 11. HBO / Max
+            if (name.includes('HBO') || name.includes('MAX')) {
+                let isMax = name.includes('MAX') && !name.includes('HBO');
+                let bg = isMax ? '#3B0764' : '#05070D';
+                let txt = isMax ? 'MAX' : 'HBO';
+                let sub = 'CINEMA';
+                if (name.includes('2')) sub = '2';
+                else if (name.includes('FAMILY')) sub = 'FAMILY';
+                else if (name.includes('PLUS')) sub = 'PLUS';
+                else if (name.includes('POP')) sub = 'POP';
+                else if (name.includes('SIGNATURE')) sub = 'SIGNATURE';
+                else if (name.includes('XTREME')) sub = 'XTREME';
+                else if (name.includes('MUNDI')) sub = 'MUNDI';
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="${bg}"/>
+                    <circle cx="60" cy="42" r="32" fill="#1E293B"/>
+                    <text x="60" y="52" font-family="system-ui, sans-serif" font-weight="900" font-size="32" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">${txt}</text>
+                    ${!isMax ? '<circle cx="82" cy="43" r="5" fill="' + bg + '"/>' : ''}
+                    <text x="60" y="80" font-family="system-ui, sans-serif" font-weight="800" font-size="13" fill="#94A3B8" text-anchor="middle">${sub}</text>
+                </svg>`;
+            }
+
+            // 12. CNN / CNN Brasil
+            if (name.includes('CNN')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#CC0000"/>
+                    <text x="60" y="50" font-family="system-ui, sans-serif" font-weight="900" font-size="34" fill="#FFFFFF" text-anchor="middle" letter-spacing="-1">CNN</text>
+                    <rect x="25" y="62" width="70" height="20" rx="4" fill="#000000"/>
+                    <text x="60" y="77" font-family="system-ui, sans-serif" font-weight="900" font-size="12" fill="#FFFFFF" text-anchor="middle">BRASIL</text>
+                </svg>`;
+            }
+
+            // 13. Discovery
+            if (name.includes('DISCOVERY')) {
+                let sub = 'CHANNEL';
+                if (name.includes('KIDS')) sub = 'KIDS';
+                else if (name.includes('HOME') || name.includes('HEALTH')) sub = 'H&H';
+                else if (name.includes('TURBO')) sub = 'TURBO';
+                else if (name.includes('SCIENCE')) sub = 'SCIENCE';
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#0369A1"/>
+                    <circle cx="60" cy="30" r="14" fill="#38BDF8"/>
+                    <text x="60" y="36" font-family="system-ui, sans-serif" font-weight="900" font-size="17" fill="#0369A1" text-anchor="middle">D</text>
+                    <text x="60" y="62" font-family="system-ui, sans-serif" font-weight="900" font-size="13" fill="#FFFFFF" text-anchor="middle" letter-spacing="0.5">DISCOVERY</text>
+                    <text x="60" y="80" font-family="system-ui, sans-serif" font-weight="800" font-size="13" fill="#BAE6FD" text-anchor="middle">${sub}</text>
+                </svg>`;
+            }
+
+            // 14. Cartoon Network
+            if (name.includes('CARTOON') || name.includes(' CN ')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#000000"/>
+                    <rect x="20" y="20" width="36" height="40" rx="6" fill="#FFFFFF"/>
+                    <text x="38" y="50" font-family="system-ui, sans-serif" font-weight="900" font-size="27" fill="#000000" text-anchor="middle">C</text>
+                    <rect x="64" y="20" width="36" height="40" rx="6" fill="#000000" stroke="#FFFFFF" stroke-width="2"/>
+                    <text x="82" y="50" font-family="system-ui, sans-serif" font-weight="900" font-size="27" fill="#FFFFFF" text-anchor="middle">N</text>
+                    <text x="60" y="80" font-family="system-ui, sans-serif" font-weight="800" font-size="11" fill="#FFFFFF" text-anchor="middle">CARTOON</text>
+                </svg>`;
+            }
+
+            // 15. Universal
+            if (name.includes('UNIVERSAL')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#0B132B"/>
+                    <circle cx="60" cy="34" r="20" fill="#1C2541" stroke="#38BDF8" stroke-width="2"/>
+                    <ellipse cx="60" cy="34" rx="20" ry="7" fill="none" stroke="#38BDF8" stroke-width="1.5"/>
+                    <text x="60" y="74" font-family="system-ui, sans-serif" font-weight="900" font-size="14" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">UNIVERSAL</text>
+                </svg>`;
+            }
+
+            // 16. Warner
+            if (name.includes('WARNER') || name.includes('WB')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#1E3A8A"/>
+                    <path d="M60 16 L86 28 C86 52 74 72 60 84 C46 72 34 52 34 28 Z" fill="#2563EB" stroke="#FACC15" stroke-width="2"/>
+                    <text x="60" y="58" font-family="system-ui, sans-serif" font-weight="900" font-size="22" fill="#FACC15" text-anchor="middle">WB</text>
+                </svg>`;
+            }
+
+            // 17. TNT
+            if (name.includes('TNT')) {
+                let sub = name.includes('NOVELAS') ? 'NOVELAS' : (name.includes('SERIES') ? 'SÉRIES' : '');
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#991B1B"/>
+                    <circle cx="60" cy="38" r="24" fill="#B91C1C"/>
+                    <text x="60" y="47" font-family="system-ui, sans-serif" font-weight="900" font-size="26" fill="#FFFFFF" text-anchor="middle" letter-spacing="-0.5">TNT</text>
+                    <text x="60" y="80" font-family="system-ui, sans-serif" font-weight="900" font-size="13" fill="#FDE047" text-anchor="middle">${sub}</text>
+                </svg>`;
+            }
+
+            // 18. Modo Econômico
+            if (name.includes('ECO') || name.includes('ECONÔMICO') || name.includes('ECONOMIC')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#064E3B"/>
+                    <text x="60" y="46" font-family="system-ui, sans-serif" font-size="28" text-anchor="middle">⚡</text>
+                    <rect x="24" y="58" width="72" height="24" rx="6" fill="#10B981"/>
+                    <text x="60" y="75" font-family="system-ui, sans-serif" font-weight="900" font-size="15" fill="#022C22" text-anchor="middle">MODO ECO</text>
+                </svg>`;
+            }
+
+            // 19. Outros
+            if (name.includes('CULTURA')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#047857"/>
+                    <circle cx="60" cy="36" r="20" fill="#10B981"/>
+                    <text x="60" y="43" font-family="system-ui, sans-serif" font-weight="900" font-size="20" fill="#FFFFFF" text-anchor="middle">c</text>
+                    <text x="60" y="78" font-family="system-ui, sans-serif" font-weight="900" font-size="15" fill="#FFFFFF" text-anchor="middle">CULTURA</text>
+                </svg>`;
+            }
+            if (name.includes('REDETV')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#7F1D1D"/>
+                    <text x="60" y="52" font-family="system-ui, sans-serif" font-weight="900" font-size="24" fill="#FFFFFF" text-anchor="middle">RedeTV!</text>
+                </svg>`;
+            }
+            if (name.includes('CAZE') || name.includes('CAZÉ')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#FACC15"/>
+                    <text x="60" y="46" font-family="system-ui, sans-serif" font-weight="900" font-size="24" fill="#000000" text-anchor="middle">CAZÉ</text>
+                    <rect x="42" y="54" width="36" height="22" rx="4" fill="#000000"/>
+                    <text x="60" y="70" font-family="system-ui, sans-serif" font-weight="900" font-size="14" fill="#FACC15" text-anchor="middle">TV</text>
+                </svg>`;
+            }
+            if (name.includes('PARAMOUNT')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#0369A1"/>
+                    <path d="M60 22 L75 55 L45 55 Z" fill="#FFFFFF"/>
+                    <text x="60" y="78" font-family="system-ui, sans-serif" font-weight="900" font-size="12" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">PARAMOUNT</text>
+                </svg>`;
+            }
+            if (name.includes('MEGAPIX')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#EA580C"/>
+                    <text x="60" y="56" font-family="system-ui, sans-serif" font-weight="900" font-size="18" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">MEGAPIX</text>
+                </svg>`;
+            }
+            if (name.includes('SPACE')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#1E1B4B"/>
+                    <circle cx="60" cy="36" r="16" fill="#4338CA"/>
+                    <text x="60" y="74" font-family="system-ui, sans-serif" font-weight="900" font-size="16" fill="#FFFFFF" text-anchor="middle" letter-spacing="2">SPACE</text>
+                </svg>`;
+            }
+            if (name.includes('SONY')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#3B0764"/>
+                    <text x="60" y="56" font-family="system-ui, sans-serif" font-weight="900" font-size="22" fill="#FFFFFF" text-anchor="middle" letter-spacing="2">SONY</text>
+                </svg>`;
+            }
+            if (name.includes('AXN')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#450A0A"/>
+                    <text x="60" y="56" font-family="system-ui, sans-serif" font-weight="900" font-size="24" fill="#EF4444" text-anchor="middle" letter-spacing="2">AXN</text>
+                </svg>`;
+            }
+            if (name.includes('VIVA')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#BE123C"/>
+                    <text x="60" y="58" font-family="system-ui, sans-serif" font-weight="900" font-size="28" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">viva</text>
+                </svg>`;
+            }
+            if (name.includes('MULTISHOW')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#6B21A8"/>
+                    <text x="60" y="56" font-family="system-ui, sans-serif" font-weight="900" font-size="14" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">MULTISHOW</text>
+                </svg>`;
+            }
+            if (name.includes('JOVEM PAN') || name.includes('JP NEWS')) {
+                return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="100" rx="14" fill="#DC2626"/>
+                    <text x="60" y="48" font-family="system-ui, sans-serif" font-weight="900" font-size="28" fill="#FFFFFF" text-anchor="middle">JP</text>
+                    <text x="60" y="74" font-family="system-ui, sans-serif" font-weight="900" font-size="14" fill="#FFFFFF" text-anchor="middle">NEWS</text>
+                </svg>`;
+            }
+
+            // 20. Badge Dinâmico e Elegante para qualquer outro canal (Sem fallback feio de emoji)
+            let hash = 0;
+            for (let i = 0; i < name.length; i++) hash = (hash << 5) - hash + name.charCodeAt(i);
+            const palettes = [
+                { bg1: '#0F172A', bg2: '#1E293B', accent: '#38BDF8' },
+                { bg1: '#064E3B', bg2: '#047857', accent: '#34D399' },
+                { bg1: '#1E1B4B', bg2: '#3730A3', accent: '#818CF8' },
+                { bg1: '#4C0519', bg2: '#881337', accent: '#FB7185' },
+                { bg1: '#0C2340', bg2: '#0369A1', accent: '#7DD3FC' },
+                { bg1: '#451A03', bg2: '#78350F', accent: '#FBBF24' }
+            ];
+            const p = palettes[Math.abs(hash) % palettes.length];
+
+            let words = name.replace(/[^A-Z0-9\s]/g, '').trim().split(/\s+/).filter(w => !['HD','FHD','4K','SD','BR','H264','H265','1080P','720P'].includes(w));
+            let monogram = 'TV';
+            if (words.length >= 2) {
+                monogram = (words[0].substring(0, 2) + words[1].substring(0, 1)).substring(0, 4);
+            } else if (words.length === 1 && words[0].length >= 3) {
+                monogram = words[0].substring(0, 3);
+            }
+
+            return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+                <rect width="120" height="100" rx="14" fill="${p.bg1}"/>
+                <circle cx="60" cy="34" r="18" fill="${p.bg2}" stroke="${p.accent}" stroke-width="1.5"/>
+                <text x="60" y="40" font-family="system-ui, sans-serif" font-weight="900" font-size="14" fill="${p.accent}" text-anchor="middle">TV</text>
+                <text x="60" y="74" font-family="system-ui, sans-serif" font-weight="900" font-size="18" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">${monogram}</text>
+            </svg>`;
+        }
+
         // Renderiza Canais com Sanitização XSS e Acessibilidade
         function renderChannels() {
             const container = document.getElementById('channels-list');
@@ -6977,16 +7642,10 @@
                 const safeCategory = escapeHtml(ch.category || (ch.is_eco ? '⚡ Modo Econômico' : 'Canal ao Vivo'));
                 const isFav = favoritesSet.has(String(ch.id));
 
-                let logoHtml = `<span class="channel-logo-fallback">${escapeHtml(ch.logo && !ch.logo.startsWith('http') ? ch.logo : '📺')}</span>`;
-                if (ch.logo && ch.logo.startsWith('http')) {
-                    const logoSrc = `/api/logo?url=${encodeURIComponent(ch.logo)}`;
-                    logoHtml = `<img class="channel-logo-img" src="${escapeHtml(logoSrc)}" alt="" loading="lazy" onerror="this.outerHTML='<span class=\'channel-logo-fallback\'>📺</span>'">`;
-                }
-
                 card.innerHTML = `
                     <div class="active-live-badge">● NO AR NA TV</div>
                     <div class="channel-num-badge">${channelNumber}</div>
-                    <div class="channel-logo-wrap">${logoHtml}</div>
+                    <div class="channel-logo-wrap" id="ch-logo-wrap-${ch.id}"></div>
                     <div class="channel-info">
                         <div class="channel-name">${safeName}</div>
                         <div class="channel-category">${safeCategory}</div>
@@ -6998,6 +7657,23 @@
                                 onclick="toggleFavorite(event, '${escapeHtml(String(ch.id))}')">${FAV_STAR_SVG_LG}</button>
                     </div>
                 `;
+
+                const logoWrap = card.querySelector(`#ch-logo-wrap-${ch.id}`);
+                if (logoWrap) {
+                    if (ch.logo && ch.logo.startsWith('http') && !ch.logo.includes('postimg.cc') && !ch.logo.includes('postimg.org')) {
+                        const img = document.createElement('img');
+                        img.className = 'channel-logo-img';
+                        img.loading = 'lazy';
+                        img.src = `/api/logo?url=${encodeURIComponent(ch.logo)}`;
+                        img.alt = safeName;
+                        img.onerror = () => {
+                            logoWrap.innerHTML = getChannelBrandBadge(ch.name);
+                        };
+                        logoWrap.appendChild(img);
+                    } else {
+                        logoWrap.innerHTML = getChannelBrandBadge(ch.name);
+                    }
+                }
 
                 card.onclick = (e) => {
                     if (e.target.closest('.channel-fav-btn')) return;

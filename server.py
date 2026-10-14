@@ -154,7 +154,7 @@ _discover_xtream_credentials()
 if not XTREAM_UPSTREAM:
     XTREAM_UPSTREAM = "http://studut.shop:80"
 VOD_TASKS = {}
-VOD_TASKS_LOCK = threading.Lock()
+VOD_TASKS_LOCK = threading.RLock()
 ACTIVE_VOD_TASK = None
 VOD_SEMAPHORE = threading.Semaphore(2)
 VOD_RUNNING_PROCS = {}
@@ -166,6 +166,23 @@ def _vod_subproc_setup():
     os.setsid()
     try:
         os.nice(15)
+    except Exception:
+        pass
+
+def safe_kill_proc(p):
+    if not p:
+        return
+    try:
+        if p.stdout:
+            p.stdout.close()
+    except Exception:
+        pass
+    try:
+        p.kill()
+    except Exception:
+        pass
+    try:
+        p.wait(timeout=2.0)
     except Exception:
         pass
 
@@ -181,11 +198,23 @@ def load_vod_tasks():
             VOD_TASKS = {}
 
 def save_vod_tasks():
-    try:
-        with open(VOD_META_FILE, "w") as f:
-            json.dump(VOD_TASKS, f, indent=2)
-    except Exception:
-        pass
+    with VOD_TASKS_LOCK:
+        try:
+            snapshot = dict(VOD_TASKS)
+            tmp_file = VOD_META_FILE + ".tmp"
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, indent=2, ensure_ascii=False)
+            try:
+                os.replace(tmp_file, VOD_META_FILE)
+            except OSError:
+                with open(VOD_META_FILE, "w", encoding="utf-8") as f:
+                    json.dump(snapshot, f, indent=2, ensure_ascii=False)
+                try:
+                    os.remove(tmp_file)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[!] Erro ao salvar vod_meta.json: {e}")
 
 load_vod_tasks()
 
@@ -2088,10 +2117,7 @@ class StreamHub:
                         log_event("STANDBY_ENTER")
                         self.in_standby = True
                         if self.proc:
-                            try:
-                                self.proc.kill()
-                            except Exception:
-                                pass
+                            safe_kill_proc(self.proc)
                             self.proc = None
                         continue
 
@@ -2175,10 +2201,7 @@ class StreamHub:
                     if p and p.poll() is None:
                         print("[!] Upstream travado em Slate por >15s. Forçando reinício do FFmpeg...")
                         log_event("WATCHDOG_FFMPEG_KILL (stuck in slate >15s)")
-                        try:
-                            p.kill()
-                        except Exception:
-                            pass
+                        safe_kill_proc(p)
 
                 if self.slate_chunks:
                     now = time.time()
@@ -2329,10 +2352,7 @@ class StreamHub:
                         print(f"[!] Modo Eco falhou ou expirou para {target_name} (rc={rc}). Ativando Fallback Inteligente para Transcode (libx264)...")
                         log_event(f"SWITCH_ECO_FALLBACK_TRANSCODE {target_id} rc={rc}")
                         if new_p:
-                            try:
-                                new_p.kill()
-                            except Exception:
-                                pass
+                            safe_kill_proc(new_p)
                             new_p = None
                         target_is_eco = False
 
@@ -2354,10 +2374,7 @@ class StreamHub:
                     print(f"[!] Timeout total ao conectar em {target_name}. Mantendo canal {self.current_channel_name} sem queda.")
                     log_event(f"SWITCH_TIMEOUT {target_id} (kept {self.current_channel_id})")
                     if new_p:
-                        try:
-                            new_p.kill()
-                        except Exception:
-                            pass
+                        safe_kill_proc(new_p)
                     return
 
                 # Chaveamento atômico instantâneo!
@@ -2391,10 +2408,7 @@ class StreamHub:
 
                     # Encerra o processo do canal anterior
                     if old_p:
-                        try:
-                            old_p.kill()
-                        except Exception:
-                            pass
+                        safe_kill_proc(old_p)
 
                 print(f"[✓] CHAVEAMENTO CONCLUÍDO COM SUCESSO! Novo canal ativo na TV: {target_name}")
                 log_event(f"SWITCH_OK {target_id}")
@@ -2466,10 +2480,7 @@ class StreamHub:
                 if not first_chunk or len(first_chunk[0]) == 0:
                     print(f"[!] Timeout ao conectar no YouTube: {target_name}. Mantendo canal anterior {self.current_channel_name}.")
                     log_event(f"YOUTUBE_TIMEOUT {target_id} (kept {self.current_channel_id})")
-                    try:
-                        new_p.kill()
-                    except Exception:
-                        pass
+                    safe_kill_proc(new_p)
                     return
 
                 # Chaveamento atômico instantâneo na TV!
@@ -2506,10 +2517,7 @@ class StreamHub:
                         self._broadcast(processed)
 
                     if old_p:
-                        try:
-                            old_p.kill()
-                        except Exception:
-                            pass
+                        safe_kill_proc(old_p)
 
                 print(f"[✓] YOUTUBE TRANSMITINDO NA TV COM SUCESSO! Novo conteúdo: {target_name}")
                 log_event(f"YOUTUBE_OK {target_id}")
@@ -2523,7 +2531,7 @@ class StreamHub:
 HUB = StreamHub()
 
 def dispatch_device_cmd(cmd, dedupe_key=None):
-    """Envia comando para o dispositivo ativo (Tablet via CommandBus ou Xiaomi)."""
+    """Envia comando para o dispositivo ativo via CommandBus (primário) ou ADB (fallback se watchdog offline)."""
     log_event(f"DISPATCH_CMD {cmd}")
     print(f"[*] Disparando comando para aparelho: {cmd}")
     HUB.pending_command = f"su -c '{cmd}'"
@@ -2537,15 +2545,28 @@ def dispatch_device_cmd(cmd, dedupe_key=None):
 
     item = HUB.bus.submit(cmd, dedupe_key=dedupe_key)
 
-    def _run_adb():
-        for port in [25555, 25556]:
-            try:
-                subprocess.run(["adb", "-s", f"127.0.0.1:{port}", "shell", f"su -c '{cmd}'"],
-                               timeout=45, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
-    threading.Thread(target=_run_adb, daemon=True).start()
+    tablet_polling_online = (time.time() - getattr(HUB, "tablet_last_seen", 0) <= 15)
+    if not tablet_polling_online:
+        def _run_adb():
+            for port in [25555, 25556]:
+                try:
+                    subprocess.run(["adb", "-s", f"127.0.0.1:{port}", "shell", f"su -c '{cmd}'"],
+                                   timeout=45, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+        threading.Thread(target=_run_adb, daemon=True).start()
     return item
+
+def is_safe_external_url(url):
+    if not url or not isinstance(url, str):
+        return False
+    parsed = urllib.parse.urlparse(url.strip())
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host or host in ("localhost", "127.0.0.1", "0.0.0.0", "::1") or host.startswith("169.254."):
+        return False
+    return True
 
 def resolve_vod_stream_url(url):
     """
@@ -3837,8 +3858,8 @@ self.addEventListener('message', (event) => {
 
     def proxy_logo(self, url):
         """Proxy seguro de imagens/logos/posters para evitar problemas de Mixed Content (HTTP em HTTPS)."""
-        if not url:
-            self.send_error(404)
+        if not is_safe_external_url(url):
+            self.send_error(403, "Forbidden URL")
             return
 
         with LOGO_CACHE_LOCK:
@@ -3904,10 +3925,11 @@ self.addEventListener('message', (event) => {
 
     def handle_proxy_stream(self, query):
         """Proxy seguro de fluxos de vídeo (MP4/TS/HLS) para reprodução direta no navegador desktop (Web Player)."""
-        raw_url = query.get("url", [""])[0]
-        if not raw_url:
-            self.send_error(400, "Missing url parameter")
+        url = query.get("url", [""])[0]
+        if not is_safe_external_url(url):
+            self.send_error(403, "Forbidden URL")
             return
+        raw_url = url
 
         target_url = self.resolve_stream_url(raw_url)
         headers = {
@@ -4967,7 +4989,7 @@ self.addEventListener('message', (event) => {
             for t in VOD_TASKS.values():
                 t_dict = dict(t)
                 tid = t.get("id")
-                dest = os.path.join(VOD_DIR, f"{tid}.ts")
+                dest = t.get("file_path") or os.path.join(VOD_DIR, f"{tid}.mp4")
                 if os.path.exists(dest):
                     try:
                         sz = os.path.getsize(dest)

@@ -26,7 +26,7 @@ LOGB=$BASE/boot_tv.log
 
     # Espera rede (ate ~90s) para o fetcher conseguir o pre-buffer
     n=0
-    until $BB wget -q -O /dev/null "http://tv.smre.run.place/api/status" 2>/dev/null; do
+    until $BB wget -q -T 5 -O /dev/null "http://tv.smre.run.place/api/status" 2>/dev/null; do
         n=$((n + 1))
         [ "$n" -ge 45 ] && break
         sleep 2

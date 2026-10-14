@@ -58,8 +58,11 @@ if [ -d "/sys/class/android_usb/android0" ]; then
 
     # Execute USB reconnect with new inquiry string
     echo "$INQ" > /sys/class/android_usb/android0/f_mass_storage/inquiry_string 2>/dev/null || true
+    sleep 0.2
     echo "$RO" > /sys/class/android_usb/android0/f_mass_storage/lun0/ro 2>/dev/null || true
+    sleep 0.2
     echo "$IMG" > /sys/class/android_usb/android0/f_mass_storage/lun0/file 2>/dev/null || true
+    sleep 0.2
     echo 1 > /sys/class/android_usb/android0/enable 2>/dev/null || true
 elif [ -d "/config/usb_gadget/g1" ] || [ -d "/sys/kernel/config/usb_gadget/g1" ]; then
     # Xiaomi Mi A2 (configfs)

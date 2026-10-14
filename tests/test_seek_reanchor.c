@@ -61,7 +61,10 @@ static void wait_step(void) { }
 
 static void fill_null(uint8_t *dst, size_t n) {
     size_t off = 0, frag = n % 188;
-    if (frag) { memset(dst, 0, frag); off = frag; }
+    if (frag) {
+        memset(dst, 0xFF, frag);
+        off = frag;
+    }
     for (; off + 188 <= n; off += 188) memcpy(dst + off, NULL_PKT, 188);
 }
 static inline uint64_t snap188(uint64_t v) { return v - (v % 188ULL); }
@@ -380,7 +383,7 @@ static void feeder_fill(uint64_t bytes) {
 /* ---- Check helpers ---- */
 static int is_null_block(const uint8_t *b, size_t n) {
     size_t off=0, frag=n%188;
-    if (frag){ for(size_t i=0;i<frag;i++) if(b[i]!=0) return 0; off=frag; }
+    if (frag){ for(size_t i=0;i<frag;i++) if(b[i]!=0xFF) return 0; off=frag; }
     for(;off+188<=n;off+=188) if(memcmp(b+off,NULL_PKT,188)!=0) return 0;
     return 1;
 }

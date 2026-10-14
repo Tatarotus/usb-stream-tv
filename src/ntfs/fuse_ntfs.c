@@ -205,7 +205,7 @@ static void wait_step(void) {
 static void fill_null(uint8_t *dst, size_t n) {
     size_t off = 0, frag = n % 188;
     if (frag) {
-        memcpy(dst, NULL_PKT, frag);
+        memset(dst, 0xFF, frag);
         off = frag;
     }
     for (; off + 188 <= n; off += 188) memcpy(dst + off, NULL_PKT, 188);
@@ -509,16 +509,12 @@ static void serve_live_backend(uint8_t *dst, uint64_t foff, size_t c, uint64_t d
     int is_future_probe = (s_probe >= g_s_write + 2ULL * 1024 * 1024 && !is_seq_read);
     int is_behind_probe = (s_probe < ring_old && !is_seq_read);
 
-    /* Volume check: A real user seek/jump reads multiple full blocks within the active stream window.
-     * Probes into the unwritten future (e.g. 128GB file end, 12GB) or behind ring buffer are NEVER user seeks! */
     int is_confirmed_jump = (!is_seq_read &&
                              !is_opening_grace &&
-                             !is_future_probe &&
-                             !is_behind_probe &&
                              g_probe_consecutive_count >= 4 &&
                              g_probe_accumulated_bytes >= 1ULL * 1024 * 1024);
 
-    if (g_base_valid && foff >= 8ULL * 1024 * 1024 && (is_future_probe || is_behind_probe)) {
+    if (g_base_valid && foff >= 8ULL * 1024 * 1024 && (is_future_probe || is_behind_probe) && !is_confirmed_jump) {
         fill_null(dst, c);
         /* DO NOT update g_prev_Fend here! Keep active playback chain intact */
         return;
@@ -892,7 +888,7 @@ static int vod_connect_sock(int *sock_ptr, const char *host, int port) {
         return -1;
     }
 
-    struct timeval tv = { .tv_sec = 6, .tv_usec = 0 };
+    struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
@@ -981,7 +977,8 @@ static int vod_http_fetch_chunk(int *sock_ptr, const char *host, int port,
         char *hdr_end = NULL;
 
         while (hlen < sizeof(hbuf) - 1) {
-            if (now_ms() >= deadline_ms) {
+            uint64_t cur = now_ms();
+            if (cur >= deadline_ms) {
                 vod_close_sock(sock_ptr);
                 return -1;
             }
@@ -989,6 +986,32 @@ static int vod_http_fetch_chunk(int *sock_ptr, const char *host, int port,
                 vod_close_sock(sock_ptr);
                 return -1;
             }
+
+            int wait_ms = (int)(deadline_ms - cur);
+            if (wait_ms > 1000) wait_ms = 1000;
+            if (wait_ms <= 0) {
+                vod_close_sock(sock_ptr);
+                return -1;
+            }
+
+            struct pollfd pfd;
+            pfd.fd = *sock_ptr;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+
+            int pr = poll(&pfd, 1, wait_ms);
+            if (pr < 0) {
+                if (errno == EINTR) continue;
+                vod_close_sock(sock_ptr);
+                break;
+            }
+            if (pr == 0) {
+                continue;
+            }
+            if (!(pfd.revents & (POLLIN | POLLHUP | POLLERR))) {
+                continue;
+            }
+
             ssize_t r = recv(*sock_ptr, hbuf + hlen, sizeof(hbuf) - 1 - hlen, 0);
             if (r <= 0) break;
             size_t old_len = hlen;
@@ -1072,7 +1095,8 @@ static int vod_http_fetch_chunk(int *sock_ptr, const char *host, int port,
         size_t total_body = leftover_body;
 
         while (total_body < expected_len) {
-            if (now_ms() >= deadline_ms) {
+            uint64_t cur = now_ms();
+            if (cur >= deadline_ms) {
                 vod_close_sock(sock_ptr);
                 return -1;
             }
@@ -1080,6 +1104,32 @@ static int vod_http_fetch_chunk(int *sock_ptr, const char *host, int port,
                 vod_close_sock(sock_ptr);
                 return -1;
             }
+
+            int wait_ms = (int)(deadline_ms - cur);
+            if (wait_ms > 1000) wait_ms = 1000;
+            if (wait_ms <= 0) {
+                vod_close_sock(sock_ptr);
+                return -1;
+            }
+
+            struct pollfd pfd;
+            pfd.fd = *sock_ptr;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+
+            int pr = poll(&pfd, 1, wait_ms);
+            if (pr < 0) {
+                if (errno == EINTR) continue;
+                vod_close_sock(sock_ptr);
+                break;
+            }
+            if (pr == 0) {
+                continue;
+            }
+            if (!(pfd.revents & (POLLIN | POLLHUP | POLLERR))) {
+                continue;
+            }
+
             ssize_t rd = recv(*sock_ptr, dst + total_body, expected_len - total_body, 0);
             if (rd <= 0) break;
             total_body += (size_t)rd;
@@ -1925,7 +1975,7 @@ int main(int argc, char **argv) {
     struct sigaction sa_usr;
     memset(&sa_usr, 0, sizeof(sa_usr));
     sa_usr.sa_handler = handle_sigusr1;
-    sa_usr.sa_flags = 0;
+    sa_usr.sa_flags = SA_RESTART;
     sigaction(SIGUSR1, &sa_usr, NULL);
 
     if (argc < 2) {
@@ -2222,13 +2272,7 @@ int main(int argc, char **argv) {
             uint64_t deadline_ms = now_ms() + 2800;
             int sres = ntfs_serve_disk(out_buf, offset, (size_t)to_read, deadline_ms);
             if (sres < 0) {
-                struct fuse_out_header outh;
-                memset(&outh, 0, sizeof(outh));
-                outh.unique = unique;
-                outh.error = sres;
-                outh.len = (uint32_t)sizeof(outh);
-                if (write(g_fuse_fd, &outh, sizeof(outh)) < 0) {}
-                continue;
+                fill_null(out_buf, (size_t)to_read);
             }
 
             if (total_read - last_log_bytes >= 2 * 1024 * 1024 || offset < 10000000ULL * BPS) {

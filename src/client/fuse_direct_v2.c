@@ -1403,7 +1403,10 @@ static void on_open(void) {
 
 static void fill_null(uint8_t *dst, size_t n) {
     size_t off = 0, frag = n % 188;
-    if (frag) { memset(dst, 0, frag); off = frag; }
+    if (frag) {
+        memset(dst, 0xFF, frag);
+        off = frag;
+    }
     for (; off + 188 <= n; off += 188) memcpy(dst + off, NULL_PKT, 188);
 }
 

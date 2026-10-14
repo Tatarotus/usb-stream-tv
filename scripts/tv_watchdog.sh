@@ -40,7 +40,7 @@ trunc_if_big() { # $1=arquivo $2=max_bytes
     sz=$(cat "$1" 2>/dev/null | $BB wc -c)
     case "$sz" in *[!0-9]*|"") sz=0 ;; esac
     if [ "$sz" -gt "$2" ]; then
-        $BB tail -c "$(( $2 / 2 ))" "$1" > "$1.tmp" 2>/dev/null && mv -f "$1.tmp" "$1"
+        $BB tail -c "$(( $2 / 2 ))" "$1" > "$1.tmp" 2>/dev/null && cat "$1.tmp" > "$1" && rm -f "$1.tmp"
     fi
 }
 
@@ -52,7 +52,7 @@ urlenc() {
 
 start_chisel() {
     [ -x "$CHISEL_BIN" ] || return 1
-    $BB setsid "$CHISEL_BIN" client --max-retry-interval 15s "$SERVER/chisel" R:25555:127.0.0.1:5555 >> "$CHISEL_LOG" 2>&1 &
+    $BB setsid "$CHISEL_BIN" client --max-retry-interval 15s --auth tablet:tvbridge2026 "$SERVER/chisel" R:25555:127.0.0.1:5555 >> "$CHISEL_LOG" 2>&1 &
 }
 
 lock_active() {
@@ -221,7 +221,7 @@ done
 
 if ! mkdir "$LOCKF" 2>/dev/null; then
     oldpid=$(cat "$LOCKF/pid" 2>/dev/null || true)
-    if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
+    if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null && $BB grep -q "tv_watchdog" "/proc/$oldpid/cmdline" 2>/dev/null; then
         exit 0
     fi
     rm -rf "$LOCKF"

@@ -4610,22 +4610,26 @@ self.addEventListener('message', (event) => {
             self.wfile.write(json.dumps({"success": False, "error": "Forbidden"}).encode("utf-8"))
             return
 
-        cmd_id_str = query.get("id", ["0"])[0]
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8", errors="replace") if length > 0 else ""
+
+        post_params = urllib.parse.parse_qs(body, keep_blank_values=True) if body else {}
+
+        cmd_id_str = query.get("id", [""])[0] or post_params.get("id", ["0"])[0]
         try:
             cmd_id = int(cmd_id_str)
         except Exception:
             cmd_id = 0
 
-        rc_str = query.get("rc", ["0"])[0]
+        rc_str = query.get("rc", [""])[0] or post_params.get("rc", ["0"])[0]
         try:
             rc = int(rc_str)
         except Exception:
             rc = 0
 
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8", errors="replace") if length > 0 else ""
+        out_content = post_params.get("out", [""])[0] if "out" in post_params else body
 
-        acked = HUB.bus.ack(cmd_id, rc=rc, output=body)
+        acked = HUB.bus.ack(cmd_id, rc=rc, output=out_content)
         res = json.dumps({"success": True, "acked": acked, "id": cmd_id}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

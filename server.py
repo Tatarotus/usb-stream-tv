@@ -3580,8 +3580,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 pass
 
         if not sw:
-            sw = """// Service Worker para PWA do Controle Remoto
-const CACHE_NAME = 'controle-tv-v22';
+            sw = r"""// Service Worker para PWA do Controle Remoto
+const CACHE_NAME = 'controle-tv-v23';
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
@@ -3663,7 +3663,7 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    if (url.pathname.startsWith('/live') || url.pathname.startsWith('/stream') || url.pathname.startsWith('/vod/') || url.pathname.startsWith('/api/status') || url.pathname.startsWith('/api/catalog')) {
+    if (url.pathname.startsWith('/live') || url.pathname.startsWith('/stream') || url.pathname.startsWith('/vod/') || url.pathname.startsWith('/api/status') || url.pathname.startsWith('/api/catalog') || url.pathname.startsWith('/api/vod/status') || url.pathname.startsWith('/api/favorites') || url.pathname.startsWith('/api/logo')) {
         return;
     }
 
@@ -10686,7 +10686,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v22') caches.delete(k);
+                        if (k !== 'controle-tv-v23') caches.delete(k);
                     });
                 }).catch(() => {});
             }

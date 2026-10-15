@@ -1408,6 +1408,11 @@ def resolve_youtube(yt_url):
             YT_DLP_BIN,
             "--no-warnings",
             "--no-playlist",
+            # YouTube restringe o cliente 'web' sem PO Token a 360p (640x360) quando o IP
+            # nao tem reputacao (datacenter). O cliente web_safari recebe a escada HLS
+            # completa (itag 91-96, ate 1920x1080 avc1.640028) sem exigir PO Token.
+            # 'web' permanece no fim da cadeia como fallback de metadados.
+            "--extractor-args", "youtube:player_client=web_safari,web",
             "--remote-components", "ejs:github",
         ]
         if os.path.exists(qjs_path):
@@ -1498,20 +1503,36 @@ def resolve_youtube(yt_url):
 
     video_url = None
     audio_url = None
+    selected_height = None
+    selected_fmt = None
 
     req_formats = data.get("requested_formats") or []
     if req_formats:
         for f in req_formats:
             if f.get("vcodec") != "none" and not video_url:
                 video_url = f.get("url")
+                selected_height = f.get("height")
+                selected_fmt = f.get("format_id")
             elif f.get("acodec") != "none" and not audio_url:
                 audio_url = f.get("url")
 
     if not video_url:
         video_url = data.get("url")
+        selected_height = data.get("height")
+        selected_fmt = data.get("format_id")
 
     if not video_url:
         raise ValueError("Não foi possível extrair URL do fluxo de vídeo do YouTube.")
+
+    # Telemetria: sem isso, uma selecao silenciosa de 360p passa despercebida
+    # (sintoma classico: cliente 'web' sem PO Token em IP de datacenter).
+    if selected_height and int(selected_height) >= 1080:
+        print(f"[YouTube] Formato {selected_fmt} selecionado: {selected_height}p (Full HD OK)")
+    elif selected_height:
+        print(f"[YouTube] ATENCAO: formato {selected_fmt} tem apenas {selected_height}p "
+              f"(abaixo de 1080p — Stream pode ser limitado por PO Token/IP)")
+    else:
+        print("[YouTube] ATENCAO: resolucao do formato selecionado nao detectada.")
 
     return {
         "title": title,
@@ -1520,6 +1541,8 @@ def resolve_youtube(yt_url):
         "thumbnail": thumbnail,
         "video_url": video_url,
         "audio_url": audio_url,
+        "height": selected_height,
+        "format_id": selected_fmt,
         "original_url": yt_url,
         "use_proxy": used_proxy
     }
@@ -2809,8 +2832,10 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     with VOD_TASKS_LOCK:
                         task["progress"] = 10
                         task["status_msg"] = "Baixando vídeo do YouTube em 1080p..."
+                    yt_height = None
                     try:
                         meta = resolve_youtube(url)
+                        yt_height = meta.get("height")
                         clean_title = meta.get("title") or clean_title
                         duration = meta.get("duration") or 0
                         if meta.get("thumbnail") and not poster:
@@ -2825,6 +2850,13 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                             return
                     except Exception as e:
                         print(f"[*] resolve_youtube informativo: {e}, prosseguindo para download direto...")
+
+                    # Reflete a resolucao REAL do formato escolhido (nao promete 1080p as cegas)
+                    res_label = f"{yt_height}p" if yt_height else "resolução automática"
+                    with VOD_TASKS_LOCK:
+                        if task_id in VOD_TASKS:
+                            task["status_msg"] = f"Baixando vídeo do YouTube em {res_label}..."
+                            save_vod_tasks()
 
                     fat_name_preview = format_fat_media_name(clean_title)
                     with VOD_TASKS_LOCK:
@@ -2841,8 +2873,15 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                             YT_DLP_BIN,
                             "--no-warnings",
                             "--no-playlist",
+                            # Mesma racional do resolve_youtube: web_safari obtem a escada
+                            # HLS completa (ate 1920x1080) onde o cliente 'web' ficaria
+                            # preso em 360p por falta de PO Token em IP de datacenter.
+                            "--extractor-args", "youtube:player_client=web_safari,web",
                             "--match-filter", "!is_live",
                             "--no-live-from-start",
+                            # HLS baixa segmento por segmento; sem fragments paralelos
+                            # a velocidade cai para ~2 MB/s (download de 1h levaria 20+ min).
+                            "--concurrent-fragments", "8",
                             "--remote-components", "ejs:github",
                             "-f", "bestvideo[height<=1080][vcodec^=avc]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
                             "--merge-output-format", "mkv",
@@ -2866,7 +2905,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     initial_proxy = proxy_clean if use_proxy_initial else ""
                     speed_label = "Proxy Móvel" if use_proxy_initial else "Gigabit Direto"
 
-                    print(f"[VOD] Baixando YouTube ({speed_label}) '{clean_title}' em 1080p...")
+                    print(f"[VOD] Baixando YouTube ({speed_label}) '{clean_title}' em {res_label}...")
                     yt_cmd = _build_vod_yt_cmd(use_cookies=has_cookies, proxy=initial_proxy)
                     proc_yt = subprocess.Popen(yt_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, preexec_fn=_vod_subproc_setup)
                     with VOD_RUNNING_PROCS_LOCK:
@@ -3140,6 +3179,28 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
             if duration > 300 and file_size < 1000000:
                 raise RuntimeError("Vídeo rejeitado pela CDN (arquivo muito pequeno ou aviso de método não autorizado)")
 
+            # Verificacao final por ffprobe: o meta passa a refletir o arquivo REAL
+            # (nao a resolucao prometida). Sem isso, uma quieta degradacao de
+            # qualidade (ex.: 360p silencioso do YouTube) so se descobre na TV.
+            final_res = None
+            final_codec = None
+            try:
+                fin = json.loads(subprocess.check_output([
+                    "ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name,profile,width,height",
+                    "-of", "json", out_file
+                ], text=True, timeout=60))
+                fst = (fin.get("streams") or [{}])[0]
+                final_codec = fst.get("codec_name")
+                fw, fh = int(fst.get("width", 0) or 0), int(fst.get("height", 0) or 0)
+                if fw and fh:
+                    final_res = f"{fw}x{fh}"
+                    print(f"[VOD] Arquivo final verificado: {final_codec} {fst.get('profile')} {final_res} — '{clean_title}'")
+                    if fh < 1080:
+                        print(f"[VOD] ATENCAO: arquivo final tem apenas {fh}p (a origem limitou a qualidade)")
+            except Exception as e:
+                print(f"[VOD] ffprobe final falhou (nao-critico): {e}")
+
             fat_name = format_fat_media_name(clean_title)
 
             if gen_template:
@@ -3150,7 +3211,9 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                 if task_id in VOD_TASKS:
                     task["status"] = "ready"
                     task["progress"] = 100
-                    task["status_msg"] = "Pronto para assistir"
+                    task["status_msg"] = f"Pronto para assistir ({final_res})" if final_res else "Pronto para assistir"
+                    task["final_resolution"] = final_res
+                    task["final_codec"] = final_codec
                     task["file_path"] = out_file
                     task["template_path"] = out_tmpl
                     task["file_size"] = file_size
@@ -3518,7 +3581,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if not sw:
             sw = r"""// Service Worker para PWA do Controle Remoto
-const CACHE_NAME = 'controle-tv-v22';
+const CACHE_NAME = 'controle-tv-v23';
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
@@ -3600,7 +3663,7 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    if (url.pathname.startsWith('/live') || url.pathname.startsWith('/stream') || url.pathname.startsWith('/vod/') || url.pathname.startsWith('/api/status') || url.pathname.startsWith('/api/catalog')) {
+    if (url.pathname.startsWith('/live') || url.pathname.startsWith('/stream') || url.pathname.startsWith('/vod/') || url.pathname.startsWith('/api/status') || url.pathname.startsWith('/api/catalog') || url.pathname.startsWith('/api/vod/status') || url.pathname.startsWith('/api/favorites') || url.pathname.startsWith('/api/logo')) {
         return;
     }
 
@@ -3841,10 +3904,6 @@ self.addEventListener('message', (event) => {
             self.send_error(404)
             return
 
-        if "postimg.cc" in url or "postimg.org" in url:
-            self.send_error(404)
-            return
-
         with LOGO_CACHE_LOCK:
             if url in LOGO_CACHE:
                 cached_data, ctype = LOGO_CACHE[url]
@@ -3883,7 +3942,7 @@ self.addEventListener('message', (event) => {
 
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 data = resp.read()
                 ctype = resp.headers.get("Content-Type", "image/jpeg")
                 with LOGO_CACHE_LOCK:
@@ -10627,7 +10686,7 @@ EMBEDDED_DASHBOARD_HTML = r"""<!DOCTYPE html>
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v22') caches.delete(k);
+                        if (k !== 'controle-tv-v23') caches.delete(k);
                     });
                 }).catch(() => {});
             }

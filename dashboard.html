@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Controle TV">
-    <meta name="theme-color" content="#0b0f19">
+    <meta name="theme-color" content="#0b1326">
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/svg+xml" href="/api/app-icon.svg">
     <link rel="apple-touch-icon" href="/api/app-icon.svg">
@@ -23,13 +23,14 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <!-- Ícones: SVG inline (MATERIAL_ICONS em JS) — não depende mais da fonte Material Symbols do Google,
+         que não era cacheada pelo service worker e quebrava os ícones no modo offline. -->
 
     <style>
         :root {
             /* Paleta Sênior Stitch Mobile Redesign */
             --bg: #0b1326;
-            --surface: #0b1326;
+            --surface: #1e293b;
             --surface-card: #1e293b;
             --surface-card-hover: #24324a;
             --surface-card-active: #334155;
@@ -37,6 +38,7 @@
             --surface-container-low: #131b2e;
             --surface-container-lowest: #060e20;
             --surface-variant: #2d3449;
+            --surface-active: #14532d;
 
             --primary: #4edea3;
             --on-primary: #003824;
@@ -53,8 +55,8 @@
 
             --text-primary: #ffffff;
             --text-main: #ffffff;
-            --text-muted: #94a3b8;
-            --text-dim: #64748b;
+            --text-muted: #cbd5e1;
+            --text-dim: #94a3b8;
             --on-surface: #dae2fd;
             --on-surface-variant: #bbcabf;
 
@@ -64,6 +66,8 @@
             --status-live: #10b981;
             --status-playback: #f59e0b;
             --danger-red: #ef4444;
+            --red: #ef4444;
+            --accent: #4edea3;
             --gold: #ffb95f;
             --green: #4edea3;
             --blue: #7bd0ff;
@@ -91,7 +95,10 @@
             min-height: 100vh;
             display: flex;
             justify-content: center;
-            padding-bottom: max(170px, calc(150px + env(safe-area-inset-bottom)));
+            /* Reserva apenas a bottom-nav (~80px) + folga. O padding extra do
+               .app-container (96px) já cobria o resto; 170+96 = 266px
+               gerava scroll fantasma no fim das listas. */
+            padding-bottom: max(96px, calc(88px + env(safe-area-inset-bottom)));
             user-select: none;
             -webkit-user-select: none;
         }
@@ -372,6 +379,28 @@
             right: 10px !important;
             top: 50% !important;
             transform: translateY(-50%) !important;
+        }
+        /* Ícones: SVG inline (hidratado por hydrateMaterialIcons) escala com o contexto via 1em */
+        .material-symbols-outlined {
+            display: inline-flex !important;
+            align-items: center;
+            justify-content: center;
+            width: 1em;
+            height: 1em;
+            line-height: 1;
+            overflow: hidden;
+            vertical-align: -0.12em;
+        }
+        .material-symbols-outlined svg {
+            width: 1em !important;
+            height: 1em !important;
+            display: block;
+            fill: currentColor;
+        }
+        /* Landscape (tablet/phone deitado): sem o padding duplo, sobra ~2 cards de conteúdo */
+        @media (orientation: landscape) and (max-height: 520px) {
+            body { padding-bottom: 12px !important; }
+            .app-container { padding-bottom: 12px !important; }
         }
         .search-actions-group .btn-clear-search,
         .drawer-search-actions .btn-clear-search {
@@ -785,14 +814,20 @@
 
         .btn-vod-grid-delete {
             background: var(--surface-card);
-            border: 1px solid var(--border);
-            color: var(--danger-red);
-            font-size: 13px;
+            border: 2px solid var(--danger-red);
+            /* #f87171 (red-400): 5,29:1 sobre --surface-card — passa WCAG AA (era #ef4444, 3,89:1) */
+            color: #f87171;
+            font-size: 15px;
             font-weight: 800;
-            padding: 8px;
+            /* Alvo de toque confortável para o público sênior (mín. 48px) */
+            min-height: 48px;
+            padding: 10px 8px;
             cursor: pointer;
             text-align: center;
-            border-radius: 10px;
+            border-radius: 12px;
+            /* Separação extra do botão ASSISTIR: evita exclusão acidental de filmos
+               de 1-2 GB por deslize de polegar (público sênior) */
+            margin-top: 10px;
             transition: background 0.15s ease;
         }
         .btn-vod-grid-delete:active {
@@ -2536,6 +2571,12 @@
             outline: none !important;
             transition: all 0.2s ease !important;
         }
+        /* Inputs de URL (YouTube/Magnet): têm apenas o botão ✕ de 44px à direita,
+           não o grupo de ações (limpar + microfone + enviar) dos campos de busca.
+           Sem esta regra, o padding de 180px reduz a área visível do link a ~33%. */
+        .senior-search-input.yt-url-input-field {
+            padding: 0 60px 0 16px !important;
+        }
         .senior-search-input:focus {
             background: var(--surface-card-active) !important;
             border-color: var(--primary) !important;
@@ -2891,7 +2932,7 @@
         }
         .drawer-alphabet-bar::-webkit-scrollbar { display: none; }
         .drawer-alpha-btn {
-            min-height: 40px;
+            min-height: 48px;
             padding: 0 14px;
             background: #172338;
             border: 1.5px solid #334155;
@@ -3356,6 +3397,11 @@
             font-weight: 700;
             margin-top: 2px;
             line-height: 1;
+            /* Evita que "Salvos (12)" quebre em 2 linhas e desalinhe a nav */
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
         }
         .bottom-nav-item.active {
             background: var(--primary) !important;
@@ -4041,7 +4087,7 @@
 
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (!SpeechRecognition) {
-                showActionBanner('🎤 Seu navegador não suporta reconhecimento de voz direto. Digite no campo de busca.', 5000);
+                showActionBanner('🎤 Seu navegador não suporta reconhecimento de voz direto. Digite no campo de busca.', 'warn', 5000);
                 return;
             }
 
@@ -4062,7 +4108,7 @@
                 } catch (micErr) {
                     console.warn('Permissão de microfone não concedida via getUserMedia:', micErr);
                     if (micErr.name === 'NotAllowedError' || micErr.name === 'PermissionDeniedError') {
-                        showActionBanner('🎤 Acesso ao microfone negado! Permita o microfone no topo do navegador.', 6000);
+                        showActionBanner('🎤 Acesso ao microfone negado! Permita o microfone no topo do navegador.', 'warn', 6000);
                         stopVoiceSearch();
                         return;
                     }
@@ -4110,14 +4156,14 @@
                 speechRecognitionInstance.onerror = (event) => {
                     console.warn('Erro de reconhecimento de voz:', event.error);
                     if (event.error === 'not-allowed') {
-                        showActionBanner('🎤 Acesso ao microfone negado. Permita o microfone nas configurações do navegador.', 6000);
+                        showActionBanner('🎤 Acesso ao microfone negado. Permita o microfone nas configurações do navegador.', 'warn', 6000);
                         stopVoiceSearch();
                     } else if (event.error === 'no-speech') {
                         if (currentVoiceTranscript && !voiceHandled) {
                             voiceHandled = true;
                             handleVoiceTranscript(currentVoiceTranscript);
                         } else {
-                            showActionBanner('🎤 Nenhuma fala detectada. Fale mais perto do microfone.', 4000);
+                            showActionBanner('🎤 Nenhuma fala detectada. Fale mais perto do microfone.', 'warn', 4000);
                             stopVoiceSearch();
                         }
                     } else {
@@ -4138,7 +4184,7 @@
                 speechRecognitionInstance.start();
             } catch (err) {
                 console.error('Falha ao iniciar reconhecimento de voz:', err);
-                showActionBanner('🎤 Erro ao iniciar reconhecimento de voz. Tente novamente.', 4000);
+                showActionBanner('🎤 Erro ao iniciar reconhecimento de voz. Tente novamente.', 'warn', 4000);
                 stopVoiceSearch();
             }
         }
@@ -4419,6 +4465,74 @@
         // Ícones SVG Vetoriais de Alta Precisão (Geometria 100% simétrica sem distorções de fonte do Android)
         const FAV_STAR_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true" style="display:block;pointer-events:none;"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>';
         const FAV_STAR_SVG_LG = '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true" style="display:block;pointer-events:none;"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>';
+
+        // ==================== SPRITE SVG INLINE (substituto offline da fonte Material Symbols) ====================
+        // Motivo: a fonte Material Symbols era carregada do Google Fonts e NÃO era cacheada pelo service worker
+        // (resposta cross-origin type='cors'). No modo PWA offline, os ícones viravam o texto cru ("live_tv").
+        // Com SVG inline, os ícones funcionam sem rede alguma. fill="currentColor" herda a cor do contexto.
+        const MATERIAL_ICONS = {
+            'search': 'M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z',
+            'mic': 'M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.49 6-3.31 6-6.72h-1.7z',
+            'backspace': 'M22 3H7c-.69 0-1.23.35-1.59.88L0 12l5.41 8.11c.36.53.9.89 1.59.89h15c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-3 12.59L17.59 17 14 13.41 10.41 17 9 15.59 12.59 12 9 8.41 10.41 7 14 10.59 17.59 7 19 8.41 15.41 12 19 15.59z',
+            'vertical_align_top': 'M8 11h3v10h2V11h3l-4-4-4 4zm0-8h8v2H8z',
+            'lightbulb': 'M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7zm2.85 11.1l-.85.6V16h-4v-2.3l-.85-.6A4.997 4.997 0 0 1 7 9c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.63-.8 3.16-2.15 4.1z',
+            'arrow_forward': 'M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z',
+            'arrow_back': 'M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z',
+            'apps': 'M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z',
+            'save': 'M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z',
+            'hard_drive': 'M2 20h20v-4H2v4zm2-3h2v2H4v-2zM2 4v4h20V4H2zm4 3H4V5h2v2zm-4 7h20v-4H2v4zm2-3h2v2H4v-2z',
+            'folder_open': 'M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z',
+            'close': 'M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
+            'movie': 'M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z',
+            'video_library': 'M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12.5v-9l6 4.5-6 4.5z',
+            'child_care': 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8 0-1.48.44-2.86 1.2-4L10 12.8v.7c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-.7l4.8-4.8c.76 1.14 1.2 2.52 1.2 4 0 4.41-3.59 8-8 8z',
+            'newspaper': 'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z',
+            'sports_soccer': 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41C19.12 5.79 21 8.67 21 12c0 1.66-.55 3.19-1.48 4.43l.01-.04z',
+            'theater_comedy': 'M2 16.5c0-1.5.5-2.9 1.3-4H2V8h5.7C8.9 6.4 10.4 5.5 12 5.5s3.1.9 4.3 2.5H22v4.5h-1.3c.8 1.1 1.3 2.5 1.3 4v.5h-9V20h6v2H5v-2h6v-3H2v-.5z',
+            'psychology': 'M13 5c-2.76 0-5 2.24-5 5 0 .55.09 1.07.25 1.56L4 15.81V20h5v-2h2v-2h2.19l1.56-4.25c.49.16 1.01.25 1.56.25 2.76 0 5-2.24 5-5s-2.24-5-5-5h-4.31zM13 7c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3z',
+            'favorite': 'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z',
+            'menu_book': 'M21 5c-1.11-.35-2.33-.5-3.5-.5-1.95 0-4.05.4-5.5 1.5-1.45-1.1-3.55-1.5-5.5-1.5S2.45 4.9 1 6v14.65c0 .25.25.5.5.5.1 0 .15-.05.25-.05C3.1 20.45 5.05 20 6.5 20c1.95 0 4.05.4 5.5 1.5 1.35-.85 3.8-1.5 5.5-1.5 1.65 0 3.35.3 4.75 1.05.1.05.15.05.25.05.25 0 .5-.25.5-.5V6c-.6-.45-1.25-.75-2-1zm0 13.5c-1.1-.35-2.3-.5-3.5-.5-1.7 0-4.15.65-5.5 1.5V8c1.35-.85 3.8-1.5 5.5-1.5 1.2 0 2.4.15 3.5.5v11.5z',
+            'category': 'M12 2l-5.5 9h11L12 2zm-5.5 13c-2.49 0-4.5 2.01-4.5 4.5S3.01 24 5.5 24 10 21.99 10 19.5 7.99 15 5.5 15zm13 0c-2.49 0-4.5 2.01-4.5 4.5S15.01 24 17.5 24 22 21.99 22 19.5 19.99 15 17.5 15z',
+            'check_circle': 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z',
+            'star': 'M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z',
+            'live_tv': 'M21 6h-7.59l3.29-3.29L16 2l-4 4-4-4-.71.71L10.59 6H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm0 14H3V8h18v12zM9 11v4a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z',
+            'bolt': 'M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z'
+        };
+
+        function materialIconSvg(name) {
+            const path = MATERIAL_ICONS[name];
+            if (!path) return null;
+            return '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor" aria-hidden="true" focusable="false" style="display:block;pointer-events:none;"><path d="' + path + '"/></svg>';
+        }
+
+        let _iconHydrationScheduled = false;
+        function hydrateMaterialIcons() {
+            // Substitui o texto-ligadura ("live_tv") pelo SVG inline correspondente.
+            // Idempotente: spans já hidratados (data-hydrated) são ignorados.
+            const spans = document.querySelectorAll('.material-symbols-outlined:not([data-hydrated])');
+            spans.forEach(el => {
+                const name = (el.textContent || '').trim();
+                const svg = materialIconSvg(name);
+                if (!svg) return; // ícone desconhecido: mantém como está
+                el.innerHTML = svg;
+                el.setAttribute('data-hydrated', '1');
+            });
+        }
+        function scheduleIconHydration() {
+            if (_iconHydrationScheduled) return;
+            _iconHydrationScheduled = true;
+            requestAnimationFrame(() => {
+                _iconHydrationScheduled = false;
+                hydrateMaterialIcons();
+            });
+        }
+        // Observa renders dinâmicos (grids/modais são montados via innerHTML)
+        if (typeof MutationObserver !== 'undefined' && document.documentElement) {
+            new MutationObserver(scheduleIconHydration).observe(document.documentElement, { childList: true, subtree: true });
+        }
+        // Hidrata markup estático já parseado (nav inferior, drawer, etc.)
+        hydrateMaterialIcons();
+
 
         // Estado Global com Persistência em LocalStorage (0ms de latência e à prova de reinicialização)
         let currentAppMode = localStorage.getItem('tv_last_mode') || 'cinema'; // Cinema como prioridade do casal!
@@ -4790,7 +4904,7 @@
             if (event) event.stopPropagation();
             triggerHaptic();
 
-            const ch = filteredChannels[idx];
+            const ch = allChannels[idx];
             if (!ch) return;
 
             const isHls = ch.url && (ch.url.includes('.m3u8') || ch.url.includes('/hls/'));
@@ -4877,17 +4991,23 @@
         updateClock();
 
         // Banner Acolhedor de Notificação (Duração de 8 segundos)
-        function showActionBanner(msg, type = 'info') {
+        function showActionBanner(msg, type = 'info', duration = 8000) {
             const b = document.getElementById('action-banner');
             if (!b) return;
             if (actionBannerTimer) clearTimeout(actionBannerTimer);
+
+            // Retrocompatibilidade: chamadas antigas passavam a duração como 2º argumento
+            if (typeof type === 'number') {
+                duration = type;
+                type = 'info';
+            }
 
             b.innerHTML = msg;
             b.style.display = 'block';
             if (type === 'success') {
                 b.style.background = '#14532d';
                 b.style.borderColor = '#22c55e';
-            } else if (type === 'warn') {
+            } else if (type === 'warn' || type === 'error') {
                 b.style.background = '#78350f';
                 b.style.borderColor = '#facc15';
             } else {
@@ -4897,7 +5017,7 @@
 
             actionBannerTimer = setTimeout(() => {
                 b.style.display = 'none';
-            }, 8000);
+            }, duration);
         }
 
         // Autenticação Silenciosa (PIN 1233 padrão)
@@ -5744,6 +5864,7 @@
             }
 
             const isTor = isTorrentTask(task);
+            const urlLower = (task.url || '').toLowerCase();
             const isYt = !isTor && (urlLower.includes('youtube.com') || urlLower.includes('youtu.be') || fullTitle.toLowerCase().includes('youtube'));
             const isSeries = !isTor && (Boolean(epInfo) || fullTitle.includes(' - ') || fullTitle.toLowerCase().includes('temporada') || fullTitle.toLowerCase().includes('episodio') || fullTitle.toLowerCase().includes('ep '));
 
@@ -5843,7 +5964,7 @@
             const task = selectedVodTaskForModal;
             const title = task.title || task.display_name || 'Vídeo';
             closeVodDetailsModal();
-            openWebPlayerVod(task.id, title);
+            playVodTaskOnWeb(task.id, title, task.poster);
         }
 
         // Tocar Filme ou Série VOD na TV
@@ -6713,6 +6834,10 @@
                             ${ratingBadge}
                             ${savedBadge}
                             ${favBadge}
+                            <button class="channel-fav-btn series-fav-star ${isFav ? 'is-fav' : ''}"
+                                    title="Favoritar Série"
+                                    aria-label="${isFav ? 'Remover série dos favoritos' : 'Adicionar série aos favoritos'}"
+                                    onclick="toggleSeriesFavorite(event, '${escapeHtml(sIdStr)}')">${FAV_STAR_SVG}</button>
                         </div>
                         <div class="movie-card-info">
                             <div class="catalog-movie-title">${title}</div>
@@ -7607,9 +7732,9 @@
 
             return `<svg class="channel-badge-svg" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
                 <rect width="120" height="100" rx="14" fill="${p.bg1}"/>
-                <circle cx="60" cy="34" r="18" fill="${p.bg2}" stroke="${p.accent}" stroke-width="1.5"/>
-                <text x="60" y="40" font-family="system-ui, sans-serif" font-weight="900" font-size="14" fill="${p.accent}" text-anchor="middle">TV</text>
-                <text x="60" y="74" font-family="system-ui, sans-serif" font-weight="900" font-size="18" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">${monogram}</text>
+                <circle cx="60" cy="38" r="20" fill="${p.bg2}" stroke="${p.accent}" stroke-width="1.5"/>
+                <text x="60" y="46" font-family="system-ui, sans-serif" font-weight="900" font-size="18" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">${monogram}</text>
+                <text x="60" y="82" font-family="system-ui, sans-serif" font-weight="800" font-size="13" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">TV</text>
             </svg>`;
         }
 
@@ -8103,6 +8228,8 @@
                 closeDownloadsModal();
                 closeMovieModal();
                 closeSeriesModal();
+                closeCategoriesDrawer();
+                stopVoiceSearch();
             }
 
             // Se o Web Player estiver aberto:
@@ -8157,8 +8284,8 @@
             // Teclas 1 a 9 no Modo TV Ao Vivo
             if (currentAppMode === 'live' && e.key >= '1' && e.key <= '9') {
                 const idx = parseInt(e.key, 10) - 1;
-                if (filteredChannels[idx]) {
-                    playChannel(filteredChannels[idx]);
+                if (allChannels[idx]) {
+                    playChannel(allChannels[idx]);
                 }
             } else if (e.key === 'm' || e.key === 'M') {
                 toggleMute();
@@ -8270,7 +8397,7 @@
             if ('caches' in window) {
                 caches.keys().then((keys) => {
                     keys.forEach((k) => {
-                        if (k !== 'controle-tv-v22') caches.delete(k);
+                        if (k !== 'controle-tv-v23') caches.delete(k);
                     });
                 }).catch(() => {});
             }

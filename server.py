@@ -1408,6 +1408,11 @@ def resolve_youtube(yt_url):
             YT_DLP_BIN,
             "--no-warnings",
             "--no-playlist",
+            # YouTube restringe o cliente 'web' sem PO Token a 360p (640x360) quando o IP
+            # nao tem reputacao (datacenter). O cliente web_safari recebe a escada HLS
+            # completa (itag 91-96, ate 1920x1080 avc1.640028) sem exigir PO Token.
+            # 'web' permanece no fim da cadeia como fallback de metadados.
+            "--extractor-args", "youtube:player_client=web_safari,web",
             "--remote-components", "ejs:github",
         ]
         if os.path.exists(qjs_path):
@@ -1498,20 +1503,36 @@ def resolve_youtube(yt_url):
 
     video_url = None
     audio_url = None
+    selected_height = None
+    selected_fmt = None
 
     req_formats = data.get("requested_formats") or []
     if req_formats:
         for f in req_formats:
             if f.get("vcodec") != "none" and not video_url:
                 video_url = f.get("url")
+                selected_height = f.get("height")
+                selected_fmt = f.get("format_id")
             elif f.get("acodec") != "none" and not audio_url:
                 audio_url = f.get("url")
 
     if not video_url:
         video_url = data.get("url")
+        selected_height = data.get("height")
+        selected_fmt = data.get("format_id")
 
     if not video_url:
         raise ValueError("Não foi possível extrair URL do fluxo de vídeo do YouTube.")
+
+    # Telemetria: sem isso, uma selecao silenciosa de 360p passa despercebida
+    # (sintoma classico: cliente 'web' sem PO Token em IP de datacenter).
+    if selected_height and int(selected_height) >= 1080:
+        print(f"[YouTube] Formato {selected_fmt} selecionado: {selected_height}p (Full HD OK)")
+    elif selected_height:
+        print(f"[YouTube] ATENCAO: formato {selected_fmt} tem apenas {selected_height}p "
+              f"(abaixo de 1080p — Stream pode ser limitado por PO Token/IP)")
+    else:
+        print("[YouTube] ATENCAO: resolucao do formato selecionado nao detectada.")
 
     return {
         "title": title,
@@ -1520,6 +1541,8 @@ def resolve_youtube(yt_url):
         "thumbnail": thumbnail,
         "video_url": video_url,
         "audio_url": audio_url,
+        "height": selected_height,
+        "format_id": selected_fmt,
         "original_url": yt_url,
         "use_proxy": used_proxy
     }
@@ -2809,8 +2832,10 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     with VOD_TASKS_LOCK:
                         task["progress"] = 10
                         task["status_msg"] = "Baixando vídeo do YouTube em 1080p..."
+                    yt_height = None
                     try:
                         meta = resolve_youtube(url)
+                        yt_height = meta.get("height")
                         clean_title = meta.get("title") or clean_title
                         duration = meta.get("duration") or 0
                         if meta.get("thumbnail") and not poster:
@@ -2825,6 +2850,13 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                             return
                     except Exception as e:
                         print(f"[*] resolve_youtube informativo: {e}, prosseguindo para download direto...")
+
+                    # Reflete a resolucao REAL do formato escolhido (nao promete 1080p as cegas)
+                    res_label = f"{yt_height}p" if yt_height else "resolução automática"
+                    with VOD_TASKS_LOCK:
+                        if task_id in VOD_TASKS:
+                            task["status_msg"] = f"Baixando vídeo do YouTube em {res_label}..."
+                            save_vod_tasks()
 
                     fat_name_preview = format_fat_media_name(clean_title)
                     with VOD_TASKS_LOCK:
@@ -2841,6 +2873,10 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                             YT_DLP_BIN,
                             "--no-warnings",
                             "--no-playlist",
+                            # Mesma racional do resolve_youtube: web_safari obtem a escada
+                            # HLS completa (ate 1920x1080) onde o cliente 'web' ficaria
+                            # preso em 360p por falta de PO Token em IP de datacenter.
+                            "--extractor-args", "youtube:player_client=web_safari,web",
                             "--match-filter", "!is_live",
                             "--no-live-from-start",
                             "--remote-components", "ejs:github",
@@ -2866,7 +2902,7 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                     initial_proxy = proxy_clean if use_proxy_initial else ""
                     speed_label = "Proxy Móvel" if use_proxy_initial else "Gigabit Direto"
 
-                    print(f"[VOD] Baixando YouTube ({speed_label}) '{clean_title}' em 1080p...")
+                    print(f"[VOD] Baixando YouTube ({speed_label}) '{clean_title}' em {res_label}...")
                     yt_cmd = _build_vod_yt_cmd(use_cookies=has_cookies, proxy=initial_proxy)
                     proc_yt = subprocess.Popen(yt_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, preexec_fn=_vod_subproc_setup)
                     with VOD_RUNNING_PROCS_LOCK:

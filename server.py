@@ -2879,6 +2879,9 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                             "--extractor-args", "youtube:player_client=web_safari,web",
                             "--match-filter", "!is_live",
                             "--no-live-from-start",
+                            # HLS baixa segmento por segmento; sem fragments paralelos
+                            # a velocidade cai para ~2 MB/s (download de 1h levaria 20+ min).
+                            "--concurrent-fragments", "8",
                             "--remote-components", "ejs:github",
                             "-f", "bestvideo[height<=1080][vcodec^=avc]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
                             "--merge-output-format", "mkv",
@@ -3176,6 +3179,28 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
             if duration > 300 and file_size < 1000000:
                 raise RuntimeError("Vídeo rejeitado pela CDN (arquivo muito pequeno ou aviso de método não autorizado)")
 
+            # Verificacao final por ffprobe: o meta passa a refletir o arquivo REAL
+            # (nao a resolucao prometida). Sem isso, uma quieta degradacao de
+            # qualidade (ex.: 360p silencioso do YouTube) so se descobre na TV.
+            final_res = None
+            final_codec = None
+            try:
+                fin = json.loads(subprocess.check_output([
+                    "ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name,profile,width,height",
+                    "-of", "json", out_file
+                ], text=True, timeout=60))
+                fst = (fin.get("streams") or [{}])[0]
+                final_codec = fst.get("codec_name")
+                fw, fh = int(fst.get("width", 0) or 0), int(fst.get("height", 0) or 0)
+                if fw and fh:
+                    final_res = f"{fw}x{fh}"
+                    print(f"[VOD] Arquivo final verificado: {final_codec} {fst.get('profile')} {final_res} — '{clean_title}'")
+                    if fh < 1080:
+                        print(f"[VOD] ATENCAO: arquivo final tem apenas {fh}p (a origem limitou a qualidade)")
+            except Exception as e:
+                print(f"[VOD] ffprobe final falhou (nao-critico): {e}")
+
             fat_name = format_fat_media_name(clean_title)
 
             if gen_template:
@@ -3186,7 +3211,9 @@ def _prepare_vod_thread_inner(task_id, url, title, poster=""):
                 if task_id in VOD_TASKS:
                     task["status"] = "ready"
                     task["progress"] = 100
-                    task["status_msg"] = "Pronto para assistir"
+                    task["status_msg"] = f"Pronto para assistir ({final_res})" if final_res else "Pronto para assistir"
+                    task["final_resolution"] = final_res
+                    task["final_codec"] = final_codec
                     task["file_path"] = out_file
                     task["template_path"] = out_tmpl
                     task["file_size"] = file_size
